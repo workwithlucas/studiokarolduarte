@@ -24,6 +24,7 @@ export const ERROR_MESSAGES = {
   FORBIDDEN: 'Você não tem permissão para esta ação.',
   INVALID_PHONE: 'Telefone inválido. Use DDD + número.',
   DUPLICATE_CLIENT: 'Já existe uma cliente com este nome e telefone.',
+  INVALID_SETTING: 'Configuração inválida. Confira os valores e tente de novo.',
 } as const
 
 export type ErrorCode = keyof typeof ERROR_MESSAGES
@@ -91,6 +92,12 @@ export const rpc = {
   completeAppointment: (a: Args<'rpc_complete_appointment'>) => call('rpc_complete_appointment', a),
   createBlock: (a: Args<'rpc_create_block'>) => call('rpc_create_block', a),
   deleteBlock: (a: Args<'rpc_delete_block'>) => call('rpc_delete_block', a),
+  // agent (owner only)
+  agentOverview: () => call('rpc_agent_overview', undefined as never),
+  agentSetSettings: (a: Args<'rpc_agent_set_settings'>) => call('rpc_agent_set_settings', a),
+  agentReturnConversation: (a: Args<'rpc_agent_return_conversation'>) => call('rpc_agent_return_conversation', a),
+  agentDismissAttention: (a: Args<'rpc_agent_dismiss_attention'>) => call('rpc_agent_dismiss_attention', a),
+  agentRecentMessages: (a: Args<'rpc_agent_recent_messages'>) => call('rpc_agent_recent_messages', a),
 } as const
 
 /** pt-BR message for any thrown value (RpcError carries the mapped text). */

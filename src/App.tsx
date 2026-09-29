@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { useAuth } from './auth/AuthContext'
 import { Skeleton } from './components/ui'
 import { AppLayout } from './layout/AppLayout'
+import { AgentPage } from './pages/AgentPage'
 import { AgendaPage } from './pages/AgendaPage'
 import { CatalogPage } from './pages/CatalogPage'
 import { ClientPage } from './pages/ClientPage'
@@ -48,6 +49,14 @@ export function App() {
           element={
             <OwnerOnly>
               <TeamPage />
+            </OwnerOnly>
+          }
+        />
+        <Route
+          path="agente"
+          element={
+            <OwnerOnly>
+              <AgentPage />
             </OwnerOnly>
           }
         />

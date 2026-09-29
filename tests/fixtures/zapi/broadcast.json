@@ -1,0 +1,19 @@
+{
+  "isStatusReply": false,
+  "connectedPhone": "554499999999",
+  "waitingMessage": false,
+  "isEdit": false,
+  "isGroup": false,
+  "isNewsletter": false,
+  "instanceId": "3C67AB641C8AA0412F6A2242B4E23AC7",
+  "messageId": "702CC5F7E0A6BF4421",
+  "phone": "1774895799-broadcast",
+  "fromMe": true,
+  "momment": 1774895725000,
+  "status": "RECEIVED",
+  "broadcast": true,
+  "type": "ReceivedCallback",
+  "text": {
+    "message": "Teste de lista de transmissão"
+  }
+}

@@ -616,6 +616,161 @@ export type Database = {
         }
         Relationships: []
       }
+      wa_confirmations: {
+        Row: {
+          appointment_id: string
+          message_id: string | null
+          sent_at: string
+        }
+        Insert: {
+          appointment_id: string
+          message_id?: string | null
+          sent_at?: string
+        }
+        Update: {
+          appointment_id?: string
+          message_id?: string | null
+          sent_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wa_confirmations_appointment_id_fkey"
+            columns: ["appointment_id"]
+            isOneToOne: true
+            referencedRelation: "appointments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      wa_conversations: {
+        Row: {
+          attention_at: string | null
+          attention_reason: string | null
+          audio_failures: number
+          away_sent_at: string | null
+          client_id: string | null
+          created_at: string
+          failed_runs: number
+          human_until: string | null
+          id: string
+          known_client_ids: string[]
+          last_inbound_at: string | null
+          last_outbound_at: string | null
+          lease_until: string | null
+          mode: string
+          needs_attention: boolean
+          pending_action: Json | null
+          pending_since: string | null
+          phone_e164: string
+        }
+        Insert: {
+          attention_at?: string | null
+          attention_reason?: string | null
+          audio_failures?: number
+          away_sent_at?: string | null
+          client_id?: string | null
+          created_at?: string
+          failed_runs?: number
+          human_until?: string | null
+          id?: string
+          known_client_ids?: string[]
+          last_inbound_at?: string | null
+          last_outbound_at?: string | null
+          lease_until?: string | null
+          mode?: string
+          needs_attention?: boolean
+          pending_action?: Json | null
+          pending_since?: string | null
+          phone_e164: string
+        }
+        Update: {
+          attention_at?: string | null
+          attention_reason?: string | null
+          audio_failures?: number
+          away_sent_at?: string | null
+          client_id?: string | null
+          created_at?: string
+          failed_runs?: number
+          human_until?: string | null
+          id?: string
+          known_client_ids?: string[]
+          last_inbound_at?: string | null
+          last_outbound_at?: string | null
+          lease_until?: string | null
+          mode?: string
+          needs_attention?: boolean
+          pending_action?: Json | null
+          pending_since?: string | null
+          phone_e164?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wa_conversations_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wa_conversations_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_directory"
+            referencedColumns: ["client_id"]
+          },
+          {
+            foreignKeyName: "wa_conversations_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_stats"
+            referencedColumns: ["client_id"]
+          },
+        ]
+      }
+      wa_messages: {
+        Row: {
+          body: string | null
+          conversation_id: string
+          created_at: string
+          direction: string
+          external_id: string | null
+          from_human: boolean
+          id: string
+          kind: string
+          purpose: string | null
+        }
+        Insert: {
+          body?: string | null
+          conversation_id: string
+          created_at?: string
+          direction: string
+          external_id?: string | null
+          from_human?: boolean
+          id?: string
+          kind: string
+          purpose?: string | null
+        }
+        Update: {
+          body?: string | null
+          conversation_id?: string
+          created_at?: string
+          direction?: string
+          external_id?: string | null
+          from_human?: boolean
+          id?: string
+          kind?: string
+          purpose?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wa_messages_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "wa_conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       working_hours: {
         Row: {
           end_time: string
@@ -782,6 +937,9 @@ export type Database = {
         Args: { p_action: string; p_entity: string; p_entity_id: string }
         Returns: undefined
       }
+      _cron_call: { Args: { p_function: string }; Returns: undefined }
+      _cron_send_confirmations: { Args: never; Returns: undefined }
+      _cron_wa_sweep: { Args: never; Returns: undefined }
       _is_service: { Args: never; Returns: boolean }
       _is_system: { Args: never; Returns: boolean }
       _jwt_claims: { Args: never; Returns: Json }
@@ -795,6 +953,7 @@ export type Database = {
         Args: { p_code: string; p_detail?: string }
         Returns: undefined
       }
+      _require_agent: { Args: never; Returns: undefined }
       _require_owner: { Args: never; Returns: undefined }
       _require_staff: { Args: never; Returns: undefined }
       _service_quote: {
@@ -834,6 +993,49 @@ export type Database = {
         }
         Returns: undefined
       }
+      _time_ok: { Args: { p: string }; Returns: boolean }
+      _vault_secret: { Args: { p_name: string }; Returns: string }
+      agent_claim: {
+        Args: { p_conversation_id: string; p_lease_seconds: number }
+        Returns: boolean
+      }
+      agent_flag: {
+        Args: {
+          p_conversation_id: string
+          p_handoff: boolean
+          p_handoff_hours?: number
+          p_reason: string
+        }
+        Returns: undefined
+      }
+      agent_ingest_inbound: {
+        Args: {
+          p_body: string
+          p_external_id: string
+          p_kind: string
+          p_phone: string
+        }
+        Returns: {
+          conversation_id: string
+          inserted: boolean
+        }[]
+      }
+      agent_mark_human: {
+        Args: {
+          p_body: string
+          p_external_id: string
+          p_hours: number
+          p_kind: string
+          p_phone: string
+        }
+        Returns: string
+      }
+      agent_purge_old: { Args: never; Returns: Json }
+      agent_release: { Args: { p_conversation_id: string }; Returns: undefined }
+      agent_touch_conversation: {
+        Args: { p_client_ids: string[]; p_phone: string }
+        Returns: string
+      }
       check_invariants: {
         Args: never
         Returns: {
@@ -845,6 +1047,25 @@ export type Database = {
       is_owner: { Args: never; Returns: boolean }
       is_staff: { Args: never; Returns: boolean }
       normalize_phone: { Args: { p: string }; Returns: string }
+      rpc_agent_dismiss_attention: {
+        Args: { p_conversation_id: string }
+        Returns: undefined
+      }
+      rpc_agent_overview: { Args: never; Returns: Json }
+      rpc_agent_recent_messages: {
+        Args: { p_conversation_id: string; p_limit?: number }
+        Returns: {
+          body: string
+          created_at: string
+          direction: string
+          kind: string
+        }[]
+      }
+      rpc_agent_return_conversation: {
+        Args: { p_conversation_id: string }
+        Returns: undefined
+      }
+      rpc_agent_set_settings: { Args: { p_patch: Json }; Returns: undefined }
       rpc_book_appointment: {
         Args: {
           p_action: Database["public"]["Enums"]["service_action"]

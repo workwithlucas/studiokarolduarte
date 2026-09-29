@@ -1,0 +1,29 @@
+{
+  "isStatusReply": false,
+  "connectedPhone": "554499999999",
+  "waitingMessage": false,
+  "isEdit": false,
+  "isGroup": false,
+  "isNewsletter": false,
+  "instanceId": "A20DA9C0183A2D35A260F53F5D2B9244",
+  "messageId": "3EB0AAAA0003",
+  "phone": "5544999999999",
+  "fromMe": false,
+  "momment": 1632228638000,
+  "status": "RECEIVED",
+  "chatName": "name",
+  "senderName": "name",
+  "participantPhone": null,
+  "broadcast": false,
+  "type": "ReceivedCallback",
+  "image": {
+    "mimeType": "image/jpeg",
+    "imageUrl": "https://example.test/i.jpg",
+    "thumbnailUrl": "https://example.test/t.jpg",
+    "downloadError": null,
+    "caption": "",
+    "width": 600,
+    "height": 315,
+    "viewOnce": false
+  }
+}

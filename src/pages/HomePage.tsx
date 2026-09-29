@@ -8,6 +8,7 @@ import { AppointmentSheet } from '../features/agenda/AppointmentSheet'
 import { NewAppointmentSheet } from '../features/agenda/NewAppointmentSheet'
 import { formatDayLong, formatTime, todaySP } from '../lib/datetime'
 import { firstName, toTitlePt } from '../lib/format'
+import { MODE_LABEL, useAgentOverview } from '../lib/agentQueries'
 import { useNeedsReturnCount } from '../lib/clientQueries'
 import { useAgendaRealtime, useAppointments, useProfessionals, useToConfirm, type AppointmentRow } from '../lib/queries'
 
@@ -60,6 +61,8 @@ export function HomePage() {
             ))}
         </ChipRow>
       )}
+
+      {isOwner && <AgentCard />}
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard kicker="Hoje" loading={appts.isLoading}>
@@ -116,5 +119,30 @@ function StatCard({ kicker, loading, children }: { kicker: string; loading: bool
       <Kicker>{kicker}</Kicker>
       {loading ? <Skeleton className="mt-2 h-10 w-24" /> : children}
     </div>
+  )
+}
+
+function AgentCard() {
+  const q = useAgentOverview()
+  const mode = q.data?.settings.agent_mode
+  const count = q.data?.attention.length ?? 0
+  return (
+    <Link
+      to="/agente"
+      className="flex items-center justify-between gap-4 rounded-[var(--radius-card)] border border-line bg-surface p-5 shadow-card"
+    >
+      <div>
+        <Kicker>Agente</Kicker>
+        {q.isLoading || !mode ? (
+          <Skeleton className="mt-2 h-8 w-32" />
+        ) : (
+          <p className="title-serif text-2xl">{MODE_LABEL[mode]}</p>
+        )}
+      </div>
+      <div className="text-right">
+        <p className="title-serif text-4xl">{count}</p>
+        <p className="text-help">{count === 1 ? "precisa de você" : "precisam de você"}</p>
+      </div>
+    </Link>
   )
 }

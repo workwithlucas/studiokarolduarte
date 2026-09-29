@@ -12,7 +12,10 @@
     "test:db": "node scripts/run-db-tests.mjs",
     "test:concurrency": "tsx scripts/test-concurrency.ts",
     "test:flow": "tsx scripts/test-flow.ts",
-    "dev:users": "tsx scripts/dev-users.ts"
+    "dev:users": "tsx scripts/dev-users.ts",
+    "test:agent": "tsx scripts/test-agent.ts",
+    "sim:agent": "tsx scripts/sim-agent.ts",
+    "backup": "tsx scripts/backup.ts"
   },
   "dependencies": {
     "@date-fns/tz": "^1.5.0",

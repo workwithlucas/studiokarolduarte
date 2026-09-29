@@ -1,0 +1,11 @@
+{
+  "_note": "Synthetic: shape of a non-ReceivedCallback event NOT taken from the docs. The parser only relies on type !== ReceivedCallback.",
+  "status": "READ",
+  "ids": [
+    "3EB0AAAA0001"
+  ],
+  "momment": 1632228638000,
+  "phone": "5544999999999",
+  "type": "MessageStatusCallback",
+  "instanceId": "A20DA9C0183A2D35A260F53F5D2B9244"
+}

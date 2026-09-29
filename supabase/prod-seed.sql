@@ -1,0 +1,39 @@
+-- Production seed: professionals, working hours and studio settings ONLY. No test data, no clients, no services.
+-- Safe to run more than once. Apply by pasting it in the Supabase SQL Editor (see docs/GO-LIVE.md).
+-- Edit hours in the app afterwards (Equipe > Horários).
+
+insert into professionals (name, role, color)
+select v.name, v.role::app_role, v.color
+from (values
+  ('Karol Duarte', 'owner', '#B57A88'),
+  ('Mara', 'professional', '#6F8F7A'),
+  ('Milena', 'professional', '#C9963F')
+) as v (name, role, color)
+where not exists (select 1 from professionals p where p.name = v.name);
+
+-- Placeholder hours (Mon-Sat 09:00-18:00). Only for professionals that have no hours yet.
+insert into working_hours (professional_id, weekday, start_time, end_time)
+select p.id, d, time '09:00', time '18:00'
+from professionals p, generate_series(1, 6) d
+where p.name in ('Karol Duarte', 'Mara', 'Milena')
+  and not exists (select 1 from working_hours w where w.professional_id = p.id);
+
+insert into studio_settings (key, value) values
+  ('slot_step_min', '15'),
+  ('min_notice_minutes', '60'),
+  ('max_advance_days', '60'),
+  ('return_due_days', '20'),
+  ('inactive_after_days', '60'),
+  ('recurring_min_visits', '3'),
+  ('agent_mode', '"off"'),
+  ('agent_window_start', '"07:00"'),
+  ('agent_window_end', '"22:00"'),
+  ('agent_test_numbers', '[]'),
+  ('agent_away_message', '"Oi! Recebi sua mensagem. Assim que possível eu te respondo por aqui."'),
+  ('confirmation_enabled', 'false'),
+  ('confirmation_hour', '"16:00"'),
+  ('human_takeover_hours', '3'),
+  ('history_messages', '12'),
+  ('retention_days', '14'),
+  ('debounce_seconds', '8')
+on conflict (key) do nothing;

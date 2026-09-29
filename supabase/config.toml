@@ -384,6 +384,19 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# Agent functions authenticate themselves (WEBHOOK_SECRET / CRON_SECRET / service_role), not with a user JWT.
+[functions.wa-webhook]
+verify_jwt = false
+
+[functions.agent-run]
+verify_jwt = false
+
+[functions.wa-sweep]
+verify_jwt = false
+
+[functions.send-confirmations]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

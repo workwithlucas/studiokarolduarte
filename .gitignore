@@ -7,3 +7,5 @@ supabase/.temp
 
 *.csv
 !tests/fixtures/*.csv
+
+backups/
