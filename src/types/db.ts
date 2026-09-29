@@ -927,6 +927,15 @@ export type Database = {
         }
         Returns: string
       }
+      rpc_upsert_professional: {
+        Args: {
+          p_active: boolean
+          p_color: string
+          p_id: string
+          p_name: string
+        }
+        Returns: string
+      }
       rpc_upsert_service: {
         Args: {
           p_active: boolean

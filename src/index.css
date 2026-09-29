@@ -1,1 +1,4 @@
 @import "tailwindcss";
+@import "@fontsource-variable/fraunces";
+@import "@fontsource-variable/plus-jakarta-sans";
+@import "./styles/tokens.css";

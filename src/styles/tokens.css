@@ -1,0 +1,100 @@
+/* Design tokens: the single source. Components reference these; screens never hardcode colours or type. */
+@theme {
+  --color-page-from: #FBF1EC;
+  --color-page-to: #F7EDE6;
+  --color-surface: #FFFCF8;
+  --color-line: #EFE3DA;
+  --color-ink: #4A1B2C;
+  --color-muted: #8B7B7F;
+  --color-primary-from: #B57A88;
+  --color-primary-to: #5A2138;
+  --color-gold: #D9C29A;
+  --color-success: #6F8F7A;
+  --color-warn: #C9963F;
+  --color-danger: #B5473F;
+
+  --font-display: 'Fraunces Variable', Georgia, serif;
+  --font-body: 'Plus Jakarta Sans Variable', system-ui, sans-serif;
+
+  --radius-card: 24px;
+  --radius-input: 16px;
+  --radius-pill: 9999px;
+
+  --shadow-card: 0 1px 2px rgb(74 27 44 / 0.04), 0 8px 24px -12px rgb(74 27 44 / 0.12);
+}
+
+:root {
+  --tracking-caps: 0.12em;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-fast: 180ms;
+  --motion-base: 240ms;
+  --primary-gradient: linear-gradient(135deg, var(--color-primary-from), var(--color-primary-to));
+  --page-gradient: linear-gradient(180deg, var(--color-page-from), var(--color-page-to));
+}
+
+/* Uppercase + tracking: kickers, section headers, field labels, chips, tabs, nav, pills, date line. */
+@utility label-caps {
+  font-family: var(--font-body);
+  font-weight: 500;
+  font-size: 0.6875rem;
+  line-height: 1.3;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+/* Titles and names: Fraunces, sentence case. */
+@utility title-serif {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.005em;
+  color: var(--color-ink);
+}
+
+@utility text-help {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--color-muted);
+}
+
+@utility hit {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+@layer base {
+  html {
+    background: var(--color-page-to);
+  }
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background: var(--page-gradient) fixed;
+    color: var(--color-ink);
+    font-family: var(--font-body);
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+  }
+  b,
+  strong,
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-weight: 500;
+  }
+  button {
+    font-family: inherit;
+    touch-action: manipulation;
+  }
+  input,
+  select,
+  textarea {
+    font-family: inherit;
+    font-weight: 400;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-primary-from);
+    outline-offset: 2px;
+  }
+}

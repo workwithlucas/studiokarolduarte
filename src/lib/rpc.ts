@@ -1,12 +1,9 @@
 // Typed wrapper around every rpc_*. The UI and the agent call the same functions.
 // Rule violations come back as error.message = code, error.details = pt-BR text.
-import { createClient } from '@supabase/supabase-js'
 import type { Database } from '../types/db'
+import { supabase } from './supabase'
 
-export const supabase = createClient<Database>(
-  import.meta.env.VITE_SUPABASE_URL ?? '',
-  import.meta.env.VITE_SUPABASE_ANON_KEY ?? '',
-)
+export { supabase }
 
 export const ERROR_MESSAGES = {
   SLOT_TAKEN: 'Este horário já está ocupado.',
@@ -69,6 +66,7 @@ export const rpc = {
   upsertService: (a: Args<'rpc_upsert_service'>) => call('rpc_upsert_service', a),
   upsertAddon: (a: Args<'rpc_upsert_addon'>) => call('rpc_upsert_addon', a),
   setProfessionalServices: (a: Args<'rpc_set_professional_services'>) => call('rpc_set_professional_services', a),
+  upsertProfessional: (a: Args<'rpc_upsert_professional'>) => call('rpc_upsert_professional', a),
   setWorkingHours: (a: Args<'rpc_set_working_hours'>) => call('rpc_set_working_hours', a),
   upsertPackageTemplate: (a: Args<'rpc_upsert_package_template'>) => call('rpc_upsert_package_template', a),
   // clients and packages (staff)
@@ -89,3 +87,10 @@ export const rpc = {
   createBlock: (a: Args<'rpc_create_block'>) => call('rpc_create_block', a),
   deleteBlock: (a: Args<'rpc_delete_block'>) => call('rpc_delete_block', a),
 } as const
+
+/** pt-BR message for any thrown value (RpcError carries the mapped text). */
+export function messageOf(e: unknown): string {
+  if (e instanceof RpcError) return e.message
+  if (e instanceof Error) return e.message
+  return 'Algo deu errado. Tente novamente.'
+}
