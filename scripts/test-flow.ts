@@ -3,7 +3,8 @@
 import { ymdOf, addDaysYMD, todaySP } from '../src/lib/datetime'
 import { readFileSync } from 'node:fs'
 import { decodeCsv, parseCsv, planImport, runImport } from '../src/lib/import/clients'
-import { fetchExistingClients } from '../src/lib/import/existing'
+import { fetchAppointmentKeys, fetchExistingClients, fetchImportContext } from '../src/lib/import/existing'
+import { parseAppointmentFile, planAppointments, runAppointmentImport } from '../src/lib/import/appointments'
 import { rpc, RpcError, supabase, type ErrorCode } from '../src/lib/rpc'
 
 const PASSWORD = 'studio-dev-123'
@@ -160,6 +161,83 @@ async function crmFlow(maraId: string) {
   for (const id of booked.slice(0, 2)) await rpc.cancelAppointment({ p_appointment_id: id, p_reason: 'Outro' })
 }
 
+/** Appointment import: idempotent, overlap skipped, one live ledger entry each. Owner. Cancels what it creates. */
+async function appointmentImportFlow(maraId: string) {
+  const upsert = async (name: string, kind: 'standard' | 'removal', dur: number, price: number, mDur: number | null, mPrice: number | null) => {
+    const { data } = await supabase.from('services').select('id').eq('name', name)
+    return rpc.upsertService({
+      p_id: data?.[0]?.id ?? null,
+      p_name: name,
+      p_category: 'outros',
+      p_kind: kind,
+      p_duration_min: dur,
+      p_price_cents: price,
+      p_maintenance_duration_min: mDur,
+      p_maintenance_price_cents: mPrice,
+      p_cash_price_cents: null,
+      p_active: true,
+    })
+  }
+  const svc = await upsert('ZZ Import Serviço', 'standard', 60, 5000, 45, 3000)
+  const rem = await upsert('ZZ Import Remoção', 'removal', 30, 2000, null, null)
+  const { data: links } = await supabase.from('professional_services').select('service_id').eq('professional_id', maraId)
+  await rpc.setProfessionalServices({
+    p_professional_id: maraId,
+    p_service_ids: [...new Set([...(links ?? []).map((l) => l.service_id), svc, rem])],
+  })
+
+  // Unique year per run so a re-run of this test does not hit the previous run's idempotency keys.
+  const year = 2040 + Math.floor(Math.random() * 60)
+  const text = readFileSync('tests/fixtures/appointments-sample.csv', 'utf-8').replaceAll('/2031;', `/${year};`)
+  const buf = new TextEncoder().encode(text)
+  const sheet = await parseAppointmentFile('appointments-sample.csv', buf.buffer as ArrayBuffer)
+
+  const runOnce = async () => {
+    const plan = planAppointments(sheet, await fetchImportContext())
+    return { plan, result: await runAppointmentImport(plan, { upsertClient: (a) => rpc.upsertClient(a), book: (a) => rpc.bookAppointment(a), existingKeys: await fetchAppointmentKeys() }) }
+  }
+  const first = await runOnce()
+  check('appt import: 8 created', first.result.created === 8, JSON.stringify({ c: first.result.created, e: first.result.errors, s: first.result.skipped.map((s) => s.reason) }))
+  check('appt import: no errors', first.result.errors.length === 0, JSON.stringify(first.result.errors))
+  check('appt import: overlapping row skipped', first.result.skipped.some((s) => /SLOT_TAKEN/.test(s.reason) && s.client === 'ZZ Imp Gabi'))
+  check('appt import: unknown service and professional skipped, none created', first.plan.skipped.length === 4)
+
+  const { data: imported } = await supabase
+    .from('appointments')
+    .select('id,status,client:clients(name)')
+    .eq('professional_id', maraId)
+    .gte('starts_at', `${year}-01-01T00:00:00-03:00`)
+    .lt('starts_at', `${year + 1}-01-01T00:00:00-03:00`)
+  const ids = (imported ?? []).map((a) => a.id)
+  check('appt import: 8 appointments in the agenda', ids.length === 8, String(ids.length))
+  const { data: live } = await supabase.from('ledger_entries').select('appointment_id').in('appointment_id', ids).is('voided_at', null)
+  const perAppt = new Map<string, number>()
+  for (const l of live ?? []) perAppt.set(l.appointment_id!, (perAppt.get(l.appointment_id!) ?? 0) + 1)
+  check('appt import: one live ledger entry per appointment', ids.length > 0 && ids.every((id) => perAppt.get(id) === 1))
+
+  const second = await runOnce()
+  check('appt import twice: second run creates 0', second.result.created === 0 && second.result.errors.length === 0, JSON.stringify({ c: second.result.created, e: second.result.errors }))
+
+  for (const id of ids) await rpc.cancelAppointment({ p_appointment_id: id, p_reason: 'Outro' })
+  for (const id of [svc, rem]) {
+    const { data } = await supabase.from('services').select('name,kind,duration_min,price_cents,maintenance_duration_min,maintenance_price_cents').eq('id', id).maybeSingle()
+    if (data) {
+      await rpc.upsertService({
+        p_id: id,
+        p_name: data.name,
+        p_category: 'outros',
+        p_kind: data.kind,
+        p_duration_min: data.duration_min,
+        p_price_cents: data.price_cents,
+        p_maintenance_duration_min: data.maintenance_duration_min,
+        p_maintenance_price_cents: data.maintenance_price_cents,
+        p_cash_price_cents: null,
+        p_active: false,
+      })
+    }
+  }
+}
+
 async function main() {
   await login('karol@studio.test')
 
@@ -298,6 +376,8 @@ async function main() {
   // ---- packages, import, money visibility
   await login('karol@studio.test')
   await crmFlow(mara.id)
+  await login('karol@studio.test')
+  await appointmentImportFlow(mara.id)
 
   // ---- cleanup + invariants
   await login('karol@studio.test')

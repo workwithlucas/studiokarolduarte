@@ -9,6 +9,23 @@ Regras deste roteiro:
 
 ---
 
+## Ordem geral
+
+1. `supabase link` (passo 6)
+2. `supabase db push` (passo 7)
+3. Segredos das funções (passo 8)
+4. Deploy das funções (passo 9), depois `npm run smoke:prod` (passo 9b)
+5. `prod-seed.sql` (passo 11)
+6. Usuários do Auth (passos 12 e 13)
+7. Importar clientes (passo 18)
+8. Importar agendamentos (passo 19)
+9. Agente em modo *Teste* (passo 20)
+10. Agente em modo *No ar* (passo 21)
+
+Os demais passos (contas, Vault do cron, hospedagem do app, webhook da Z-API) entram no meio dessa ordem, na numeração abaixo. O app precisa estar publicado (passos 14 e 15) antes das importações, porque elas são feitas por ele.
+
+---
+
 ## Parte A: contas e chaves
 
 **1. Chave da Anthropic.** Entre em <https://console.anthropic.com>, vá em *API Keys* > *Create Key*, nome `studio-thais`. Copie a chave (`sk-ant-...`) para o seu gerenciador de senhas. Ela só aparece uma vez.
@@ -133,6 +150,16 @@ supabase functions deploy wa-sweep --no-verify-jwt
 supabase functions deploy send-confirmations --no-verify-jwt
 ```
 
+**9b. Teste de fumaça (sem chaves, só requisições sem autenticação).** Deve imprimir `smoke:prod PASS`:
+
+```powershell
+$env:PROD_BASE_URL = "https://SEU_PROJECT_REF.supabase.co"
+```
+
+```powershell
+npm run smoke:prod
+```
+
 **10. Segredos do cron no Vault.** No painel: *SQL Editor*. Cole, trocando os valores (o `cron_secret` é o mesmo `CRON_SECRET` do passo 4, que você lê com `$env:CRON_SECRET` no PowerShell):
 
 ```sql
@@ -233,9 +260,13 @@ supabase secrets set LEGACY_WEBHOOK_URL=$env:LEGACY_WEBHOOK_URL
 
 O agente sai de fábrica **Desligado**. Não pule etapas:
 
-**18. Importe os agendamentos futuros (Tarefa 5).** A Thaís só enxerga a agenda que está no sistema: sem os horários já marcados ela pode oferecer horários ocupados no sistema antigo. Só siga depois disso.
+**18. Importe as clientes.** Entre no app com o usuário da Karol: *Clientes* > *Importar* (CSV). Confira o resumo antes de confirmar.
 
-**19. Modo Teste com o seu telefone.** No app, *Agente*: em *Teste* adicione o seu número (com DDD) e escolha *Teste*. Mande mensagens do seu celular e confira:
+**19. Importe os agendamentos futuros.** A Thaís só enxerga a agenda que está no sistema: sem os horários já marcados ela pode oferecer horários ocupados no sistema antigo. Só siga depois disso.
+
+*Agenda* > *Importar* (CSV, XLS ou XLSX). Colunas: cliente, inicio (ou data e hora separadas), servico, profissional; opcionais: telefone, fim, status, valor, observacao. Antes de importar, os serviços e as profissionais do arquivo precisam existir em *Catálogo* e *Equipe*: linhas com serviço ou profissional desconhecido são ignoradas e listadas, nada é criado. Duração e valor vêm do catálogo. Só entram horários futuros e não cancelados. Importar o mesmo arquivo de novo não cria nada. No fim, baixe a lista de erros e ajuste o que ficou de fora.
+
+**20. Modo Teste com o seu telefone.** No app, *Agente*: em *Teste* adicione o seu número (com DDD) e escolha *Teste*. Mande mensagens do seu celular e confira:
 
 - ela responde com até 3 linhas e até 2 mensagens;
 - agenda, remarca e cancela apenas horários seus (e aparecem em *Atividade recente*);
@@ -244,13 +275,13 @@ O agente sai de fábrica **Desligado**. Não pule etapas:
 
 Teste também um áudio, uma foto e uma figurinha. Se algo estiver estranho, volte para *Desligado*.
 
-**20. Modo No ar.** Quando estiver satisfeita, escolha *No ar* (o app pede confirmação). Acompanhe a página *Agente* nos primeiros dias.
+**21. Modo No ar.** Quando estiver satisfeita, escolha *No ar* (o app pede confirmação). Acompanhe a página *Agente* nos primeiros dias.
 
-**21. Confirmações de amanhã (opcional, depois de alguns dias no ar).** Em *Agente* > *Confirmações*, ligue a chave e ajuste o horário (a partir de 16:00, até 20:00). Elas só saem para agendamentos de amanhã, com status *agendado*, criados há pelo menos 3 horas.
+**22. Confirmações de amanhã (opcional, depois de alguns dias no ar).** Em *Agente* > *Confirmações*, ligue a chave e ajuste o horário (a partir de 16:00, até 20:00). Elas só saem para agendamentos de amanhã, com status *agendado*, criados há pelo menos 3 horas.
 
 ## Parte G: rotina
 
-**22. Backup semanal** (mantém os 8 últimos em `backups\`, que não vai para o Git). Use a *connection string* do Supabase (*Connect* > *Session pooler*):
+**23. Backup semanal** (mantém os 8 últimos em `backups\`, que não vai para o Git). Use a *connection string* do Supabase (*Connect* > *Session pooler*):
 
 ```powershell
 $env:DATABASE_URL = Read-Host "DATABASE_URL de produção"
@@ -260,7 +291,7 @@ $env:DATABASE_URL = Read-Host "DATABASE_URL de produção"
 npm run backup
 ```
 
-**23. Base de conhecimento.** Estas informações estão como `TODO:` em `supabase/functions/_shared/kb.ts`. Até você preencher, a Thaís deixa recado para a Karol e diz que vai confirmar:
+**24. Base de conhecimento.** Estas informações estão como `TODO:` em `supabase/functions/_shared/kb.ts`. Até você preencher, a Thaís deixa recado para a Karol e diz que vai confirmar:
 
 - endereço e como chegar
 - estacionamento

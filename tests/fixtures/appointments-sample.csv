@@ -1,0 +1,15 @@
+Cliente;Telefone;Data;Hora;Fim;Serviço;Profissional;Status;Valor;Observação
+ZZ Imp Ana;11 96666-0001;10/03/2031;09:00;10:00;ZZ Import Serviço;Mara;agendado;R$ 50,00;primeira vez
+ZZ Imp Bia;(11) 96666-0002;10/03/2031;11:00;12:30;Manutenção ZZ Import Serviço;mara;confirmado;R$ 99,00;
+ZZ Imp Carla;;11/03/2031;09:00;10:00;ZZ Import Serviço;MARA;agendado;;sem telefone
+ZZ Imp Dani;11966660004;11/03/2031;11:00;12:00;ZZ Serviço Inexistente;Mara;agendado;;
+ZZ Imp Eva;11 96666-0005;11/03/2031;13:00;14:00;ZZ Import Serviço;Profissional Fantasma;agendado;;
+ZZ Imp Fabi;11 96666-0006;05/01/2020;09:00;10:00;ZZ Import Serviço;Mara;agendado;;linha no passado
+ZZ Imp Gabi;11 96666-0007;10/03/2031;09:30;10:30;ZZ Import Serviço;Mara;agendado;;sobrepõe a Ana
+ZZ Imp Ana;11 96666-0001;10/03/2031;09:00;10:00;ZZ Import Serviço;Mara;agendado;R$ 50,00;linha duplicada
+ZZ Imp Hana;11 96666-0008;12/03/2031;09:00;10:00;ZZ Import Serviço;Mara;cancelado;;cancelada no arquivo
+ZZ Imp Iris;5511966660009;12/03/2031;11:00;12:00;Remoção ZZ Import Remoção;Mara;agendado;;telefone com 55
+ZZ Imp Ana;11 96666-0001;12/03/2031;14:00;15:00;ZZ Import Serviço;Mara;agendado;;mesma cliente, outro dia
+ZZ Imp Julia;11 96666-0010;13/03/2031;9h30;;zz import servico;mara;;;data e hora separadas, sem acento
+ZZ Imp Kelly;11 96666-0011;13/03/2031;14:00;15:00;ZZ Import Serviço;Mara;agendado;;
+ZZ Imp Luiza;abc;14/03/2031;09:00;10:00;ZZ Import Serviço;Mara;agendado;;telefone inválido

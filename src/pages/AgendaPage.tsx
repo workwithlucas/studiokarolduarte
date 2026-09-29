@@ -1,7 +1,9 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, Lock, Plus } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Lock, Plus, Upload } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
+import { ImportAppointmentsSheet } from '../features/agenda/ImportAppointmentsSheet'
 import { Button, Chip, ChipRow, EmptyState, Input, Kicker, Skeleton, TabLabel, TabList, useSnackbar } from '../components/ui'
 import { AppointmentListRow } from '../features/agenda/AppointmentListRow'
 import { AppointmentSheet, type SheetMode } from '../features/agenda/AppointmentSheet'
@@ -45,12 +47,23 @@ interface Override {
 export function AgendaPage() {
   const [params, setParams] = useSearchParams()
   const tab = params.get('tab') === 'confirmar' ? 'confirmar' : 'agenda'
+  const { isOwner } = useAuth()
+  const [importOpen, setImportOpen] = useState(false)
   useAgendaRealtime()
 
   return (
     <div>
-      <Kicker className="mb-1">Studio</Kicker>
-      <h1 className="title-serif mb-4 text-3xl">Agenda</h1>
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <Kicker className="mb-1">Studio</Kicker>
+          <h1 className="title-serif text-3xl">Agenda</h1>
+        </div>
+        {isOwner && (
+          <Button variant="secondary" icon={<Upload size={16} />} onClick={() => setImportOpen(true)}>
+            Importar
+          </Button>
+        )}
+      </div>
       <TabList>
         <TabLabel active={tab === 'agenda'} onClick={() => setParams({})}>
           Agenda
@@ -60,6 +73,7 @@ export function AgendaPage() {
         </TabLabel>
       </TabList>
       <div className="mt-4">{tab === 'agenda' ? <AgendaTab /> : <ToConfirmTab />}</div>
+      {isOwner && <ImportAppointmentsSheet open={importOpen} onClose={() => setImportOpen(false)} />}
     </div>
   )
 }

@@ -9,3 +9,5 @@ supabase/.temp
 !tests/fixtures/*.csv
 
 backups/
+
+supabase/functions/local-secrets.txt
