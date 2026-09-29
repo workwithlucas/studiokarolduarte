@@ -1,6 +1,9 @@
 // End-to-end flow against the LOCAL Supabase, through the same src/lib/rpc.ts wrappers the UI uses.
 // Needs: supabase start, npm run dev:users. Prints failures and a one-line summary only.
 import { ymdOf, addDaysYMD, todaySP } from '../src/lib/datetime'
+import { readFileSync } from 'node:fs'
+import { decodeCsv, parseCsv, planImport, runImport } from '../src/lib/import/clients'
+import { fetchExistingClients } from '../src/lib/import/existing'
 import { rpc, RpcError, supabase, type ErrorCode } from '../src/lib/rpc'
 
 const PASSWORD = 'studio-dev-123'
@@ -31,6 +34,130 @@ async function login(email: string) {
 async function statusOf(id: string): Promise<string | undefined> {
   const { data } = await supabase.from('appointments').select('status').eq('id', id).maybeSingle()
   return data?.status
+}
+
+async function importFixture(): Promise<{ created: number; matched: number; errors: number }> {
+  const text = decodeCsv(readFileSync('tests/fixtures/clients-sample.csv'))
+  const existing = await fetchExistingClients()
+  const plan = planImport(parseCsv(text), existing)
+  const r = await runImport(plan, (a) => rpc.upsertClient(a), new Set(existing.map((c) => c.id)))
+  return { created: r.created, matched: r.matched, errors: r.errors.length }
+}
+
+/** Packages, import and money visibility. Starts and ends logged in as Karol. */
+async function crmFlow(maraId: string) {
+  // ---- package template + client + sale
+  const { data: tplRows } = await supabase.from('package_templates').select('id').eq('name', 'ZZ Modelo Fluxo')
+  const { data: svcRows } = await supabase.from('services').select('id').eq('name', 'ZZ Pacote Fluxo')
+  const svcId = await rpc.upsertService({
+    p_id: svcRows?.[0]?.id ?? null,
+    p_name: 'ZZ Pacote Fluxo',
+    p_category: 'outros',
+    p_kind: 'standard',
+    p_duration_min: 30,
+    p_price_cents: 4000,
+    p_maintenance_duration_min: null,
+    p_maintenance_price_cents: null,
+    p_cash_price_cents: null,
+    p_active: true,
+  })
+  const { data: links } = await supabase.from('professional_services').select('service_id').eq('professional_id', maraId)
+  await rpc.setProfessionalServices({
+    p_professional_id: maraId,
+    p_service_ids: [...new Set([...(links ?? []).map((l) => l.service_id), svcId])],
+  })
+  const tplId = await rpc.upsertPackageTemplate({
+    p_id: tplRows?.[0]?.id ?? null,
+    p_name: 'ZZ Modelo Fluxo',
+    p_service_id: svcId,
+    p_sessions_total: 3,
+    p_validity_days: 60,
+    p_price_cents: 9000,
+    p_active: true,
+  })
+  check('owner: create package template', !!tplId)
+
+  const clientId = await rpc.upsertClient({ p_name: 'ZZ Cliente Pacote', p_phone: '11 95555-0002', p_external_code: null, p_birthday: null, p_notes: null })
+  const pkgId = await rpc.sellPackage({ p_client_id: clientId, p_template_id: tplId })
+  const remaining = async (id: string) =>
+    (await supabase.from('v_client_packages').select('remaining').eq('client_package_id', id).maybeSingle()).data?.remaining
+  check('sell package: 3 remaining', (await remaining(pkgId)) === 3)
+
+  const today = todaySP()
+  const avail = await rpc.getAvailability({
+    p_professional_id: maraId,
+    p_service_id: svcId,
+    p_action: 'placement',
+    p_addon_ids: [],
+    p_from: addDaysYMD(today, 3),
+    p_to: addDaysYMD(today, 20),
+    p_source: 'staff',
+  })
+  const firstOfDay = new Map<string, string>()
+  for (const s of avail) {
+    const d = ymdOf(s.starts_at)
+    if (!firstOfDay.has(d)) firstOfDay.set(d, s.starts_at)
+  }
+  const days = [...firstOfDay.values()]
+  if (days.length < 4) throw new Error('not enough free days for the package flow')
+
+  const bookPkg = (startsAt: string) =>
+    rpc.bookAppointment({
+      p_client_id: clientId,
+      p_professional_id: maraId,
+      p_service_id: svcId,
+      p_action: 'placement',
+      p_addon_ids: [],
+      p_starts_at: startsAt,
+      p_source: 'staff',
+      p_idempotency_key: crypto.randomUUID(),
+      p_notes: null,
+      p_client_package_id: pkgId,
+    })
+  const booked = [await bookPkg(days[0]!), await bookPkg(days[1]!), await bookPkg(days[2]!)]
+  check('3 package bookings: 0 remaining', (await remaining(pkgId)) === 0)
+  const { data: priced } = await supabase.from('appointments').select('price_cents').eq('id', booked[0]!).maybeSingle()
+  check('package appointment costs 0', priced?.price_cents === 0)
+  await expectCode('4th booking -> PACKAGE_EMPTY', 'PACKAGE_EMPTY', () => bookPkg(days[3]!))
+  await rpc.cancelAppointment({ p_appointment_id: booked[2]!, p_reason: 'Outro' })
+  check('cancel one: remaining +1', (await remaining(pkgId)) === 1)
+  await expectCode('void package with usage -> HAS_USAGE', 'HAS_USAGE', () => rpc.voidPackage({ p_client_package_id: pkgId }))
+
+  // ---- import: idempotent, families, spelling variants
+  const first = await importFixture()
+  check('import: no errors', first.errors === 0, JSON.stringify(first))
+  const second = await importFixture()
+  check('import twice: second run creates 0', second.created === 0 && second.errors === 0, JSON.stringify(second))
+  const family = await supabase.from('clients').select('id').eq('phone_e164', '5511981110001').like('name', 'ZZ%')
+  check('mother/daughter: 2 clients', family.data?.length === 2, String(family.data?.length))
+  const tere = await supabase.from('clients').select('id').eq('phone_e164', '5511982220002').like('name', 'ZZ%')
+  check('Terezinha/Teresinha: 1 client', tere.data?.length === 1, String(tere.data?.length))
+
+  // ---- owner sees spend
+  const spend = await rpc.clientSpend({ p_client_ids: [clientId] })
+  check('owner: rpc_client_spend works', spend.length === 1)
+  const ownerCtx = (await rpc.getClientContext({ p_client_id: clientId })) as Record<string, unknown>
+  check('owner: context has total_spent_cents', typeof ownerCtx.total_spent_cents === 'number')
+
+  // ---- Mara: search, no spend, sell, no void
+  await login('mara@studio.test')
+  const found = await rpc.searchClients({ p_query: 'zz cliente pacote', p_filter: 'all', p_limit: 5, p_offset: 0 })
+  check('mara: search works', found.some((c) => c.client_id === clientId))
+  const accent = await rpc.searchClients({ p_query: 'joao batista', p_filter: 'all', p_limit: 5, p_offset: 0 })
+  check('mara: accent-insensitive search', accent.some((c) => c.name === 'ZZ João Batista Lima'))
+  const maraCtx = (await rpc.getClientContext({ p_client_id: clientId })) as Record<string, unknown>
+  check('mara: context omits spend', !('total_spent_cents' in maraCtx))
+  await expectCode('mara: rpc_client_spend -> FORBIDDEN', 'FORBIDDEN', () => rpc.clientSpend({ p_client_ids: [clientId] }))
+  const stats = await supabase.from('v_client_stats').select('client_id').limit(1)
+  check('mara: v_client_stats denied', !!stats.error)
+  const maraPkg = await rpc.sellPackage({ p_client_id: clientId, p_template_id: tplId })
+  check('mara: sell package works', !!maraPkg)
+  await expectCode('mara: void package -> FORBIDDEN', 'FORBIDDEN', () => rpc.voidPackage({ p_client_package_id: maraPkg }))
+
+  // ---- cleanup (owner)
+  await login('karol@studio.test')
+  await rpc.voidPackage({ p_client_package_id: maraPkg })
+  for (const id of booked.slice(0, 2)) await rpc.cancelAppointment({ p_appointment_id: id, p_reason: 'Outro' })
 }
 
 async function main() {
@@ -167,6 +294,10 @@ async function main() {
   await expectCode('mara: upsert_professional -> FORBIDDEN', 'FORBIDDEN', () =>
     rpc.upsertProfessional({ p_id: null, p_name: 'Intrusa', p_color: null, p_active: true }),
   )
+
+  // ---- packages, import, money visibility
+  await login('karol@studio.test')
+  await crmFlow(mara.id)
 
   // ---- cleanup + invariants
   await login('karol@studio.test')

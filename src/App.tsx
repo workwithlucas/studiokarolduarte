@@ -4,8 +4,11 @@ import { Skeleton } from './components/ui'
 import { AppLayout } from './layout/AppLayout'
 import { AgendaPage } from './pages/AgendaPage'
 import { CatalogPage } from './pages/CatalogPage'
+import { ClientPage } from './pages/ClientPage'
+import { ClientesPage } from './pages/ClientesPage'
 import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
+import { PacotesPage } from './pages/PacotesPage'
 import { TeamPage } from './pages/TeamPage'
 import { UnauthorizedPage } from './pages/UnauthorizedPage'
 
@@ -36,7 +39,10 @@ export function App() {
       <Route element={<Guard />}>
         <Route index element={<HomePage />} />
         <Route path="agenda" element={<AgendaPage />} />
+        <Route path="clientes" element={<ClientesPage />} />
+        <Route path="clientes/:id" element={<ClientPage />} />
         <Route path="catalogo" element={<CatalogPage />} />
+        <Route path="pacotes" element={<PacotesPage />} />
         <Route
           path="equipe"
           element={

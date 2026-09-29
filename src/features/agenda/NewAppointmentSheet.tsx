@@ -30,18 +30,16 @@ import {
   type Addon,
   type Service,
 } from '../../lib/queries'
-import { messageOf, RpcError, rpc, supabase } from '../../lib/rpc'
+import { messageOf, RpcError, rpc } from '../../lib/rpc'
+import { useClientPackages } from '../../lib/clientQueries'
+import { ClientPicker, type PickedClient } from '../clients/ClientPicker'
+import { Link } from 'react-router-dom'
 
 export interface Prefill {
   professionalId?: string
   date?: string
   minutes?: number
-}
-
-interface PickedClient {
-  id: string
-  name: string
-  phone: string | null
+  client?: PickedClient
 }
 
 const CATEGORY_ORDER = ['unhas', 'cilios', 'sobrancelhas', 'outros']
@@ -88,36 +86,6 @@ function signedBRL(cents: number): string {
   return `${cents < 0 ? '−' : '+'} ${formatBRL(Math.abs(cents))}`
 }
 
-function useClientSearch(term: string) {
-  const [debounced, setDebounced] = useState(term)
-  useEffect(() => {
-    const t = window.setTimeout(() => setDebounced(term), 250)
-    return () => window.clearTimeout(t)
-  }, [term])
-
-  return useQuery({
-    queryKey: ['clients-search', debounced],
-    enabled: debounced.trim().length >= 2,
-    queryFn: async () => {
-      const t = debounced.replace(/[,()%*\\"]/g, ' ').trim()
-      const digits = debounced.replace(/\D/g, '').replace(/^0+/, '')
-      const parts: string[] = []
-      if (/[a-zA-ZÀ-ÿ]/.test(t)) parts.push(`name.ilike.%${t}%`)
-      if (digits.length >= 3) parts.push(`phone_e164.ilike.%${digits}%`)
-      if (parts.length === 0) return []
-      const { data, error } = await supabase
-        .from('clients')
-        .select('id,name,phone_e164')
-        .eq('archived', false)
-        .or(parts.join(','))
-        .order('name')
-        .limit(8)
-      if (error) throw new Error(error.message)
-      return data ?? []
-    },
-  })
-}
-
 interface ClientContext {
   last_visit_at: string | null
   visit_count: number
@@ -136,7 +104,7 @@ function Body({ onClose, prefill }: { onClose: () => void; prefill?: Prefill }) 
   const professionals = useProfessionals()
 
   // ---- state
-  const [client, setClient] = useState<PickedClient | null>(null)
+  const [client, setClient] = useState<PickedClient | null>(prefill?.client ?? null)
   const [category, setCategory] = useState<string | null>(null)
   const [action, setAction] = useState<ActionKey | null>(null)
   const [serviceId, setServiceId] = useState<string | null>(null)
@@ -227,8 +195,17 @@ function Body({ onClose, prefill }: { onClose: () => void; prefill?: Prefill }) 
     } else snack.show('Nenhum horário nos próximos 14 dias.', 'error')
   }
 
+  // ---- package covering the selected service
+  const clientPackages = useClientPackages(client?.id)
+  const coveringPackage = service
+    ? (clientPackages.data ?? []).find((p) => p.status === 'active' && p.remaining > 0 && p.service_id === service.id)
+    : undefined
+  const [usePackage, setUsePackage] = useState(false)
+  const packageId = usePackage && coveringPackage ? coveringPackage.client_package_id : null
+
   // ---- summary + submit
-  const summary = service && act ? quote(service, act, chosenAddons) : null
+  const quoted = service && act ? quote(service, act, chosenAddons) : null
+  const summary = quoted && packageId ? { ...quoted, total: 0 } : quoted
   const startsAt = outside ? (manualTime ? toSaoPauloISO(date, manualTime) : null) : validSlot
   const canBook = !!(client && service && act && proId && startsAt) && !pending
 
@@ -246,6 +223,7 @@ function Body({ onClose, prefill }: { onClose: () => void; prefill?: Prefill }) 
         p_source: 'staff',
         p_idempotency_key: idempotencyKey,
         p_notes: null,
+        p_client_package_id: packageId,
         p_force: outside,
       })
       invalidateAll(qc)
@@ -264,7 +242,7 @@ function Body({ onClose, prefill }: { onClose: () => void; prefill?: Prefill }) 
 
   return (
     <div className="space-y-8">
-      <ClientSection client={client} onPick={setClient} professionals={professionals.data ?? []} />
+      <ClientSection client={client} onPick={setClient} onNavigate={onClose} professionals={professionals.data ?? []} />
 
       <section>
         <SectionHeader>Serviço</SectionHeader>
@@ -388,6 +366,14 @@ function Body({ onClose, prefill }: { onClose: () => void; prefill?: Prefill }) 
             {formatDate(startsAt)} · {formatTime(startsAt)}
           </p>
         )}
+        {coveringPackage && (
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <Kicker>
+              Usar pacote ({coveringPackage.remaining}/{coveringPackage.sessions_total} restantes)
+            </Kicker>
+            <Toggle label="Usar pacote" checked={usePackage} onChange={setUsePackage} />
+          </div>
+        )}
         <div className="mt-3 flex items-center justify-between gap-3">
           <Kicker>Fora do horário</Kicker>
           <Toggle label="Fora do horário" checked={outside} onChange={setOutside} />
@@ -416,20 +402,20 @@ function Body({ onClose, prefill }: { onClose: () => void; prefill?: Prefill }) 
 function ClientSection({
   client,
   onPick,
+  onNavigate,
   professionals,
 }: {
   client: PickedClient | null
   onPick: (c: PickedClient | null) => void
+  onNavigate: () => void
   professionals: Array<{ id: string; name: string }>
 }) {
   const snack = useSnackbar()
-  const [term, setTerm] = useState('')
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [birthday, setBirthday] = useState('')
   const [saving, setSaving] = useState(false)
-  const search = useClientSearch(term)
 
   const ctx = useQuery({
     queryKey: ['client-context', client?.id],
@@ -469,7 +455,9 @@ function ClientSection({
         >
           Cliente
         </SectionHeader>
-        <p className="title-serif text-xl">{toTitlePt(client.name)}</p>
+        <Link to={`/clientes/${client.id}`} onClick={onNavigate} className="title-serif text-xl underline decoration-line underline-offset-4">
+          {toTitlePt(client.name)}
+        </Link>
         <p className="text-help">{formatPhoneBR(client.phone)}</p>
         {ctx.data && (
           <p className="text-help mt-1">
@@ -512,23 +500,7 @@ function ClientSection({
           </Button>
         </div>
       ) : (
-        <div className="space-y-2">
-          <Input placeholder="Buscar por nome ou telefone" value={term} onChange={(e) => setTerm(e.target.value)} />
-          {(search.data ?? []).map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              onClick={() => onPick({ id: c.id, name: c.name, phone: c.phone_e164 })}
-              className="hit flex w-full items-center justify-between gap-3 rounded-[var(--radius-input)] border border-line px-4 text-left"
-            >
-              <span className="title-serif text-lg">{toTitlePt(c.name)}</span>
-              <span className="text-help">{formatPhoneBR(c.phone_e164)}</span>
-            </button>
-          ))}
-          {search.data && search.data.length === 0 && term.trim().length >= 2 && (
-            <p className="text-help">Nenhuma cliente encontrada.</p>
-          )}
-        </div>
+        <ClientPicker onPick={onPick} />
       )}
     </section>
   )

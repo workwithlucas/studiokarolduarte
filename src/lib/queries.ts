@@ -22,7 +22,7 @@ export type AppointmentRow = Row<'appointments'> & {
   addons: Array<{ addon_id: string; price_delta_cents: number; duration_delta_min: number; addon: { name: string } | null }>
 }
 
-const APPT_SELECT =
+export const APPT_SELECT =
   '*, client:clients(id,name,phone_e164), service:services(id,name,category,kind), professional:professionals(id,name,color), addons:appointment_addons(addon_id,price_delta_cents,duration_delta_min,addon:service_addons(name))'
 
 /** Cancelled and no_show are never drawn. */
@@ -36,7 +36,7 @@ export const keys = {
   professionalServices: ['professional_services'] as const,
 }
 
-function fail(error: { message: string } | null) {
+export function fail(error: { message: string } | null) {
   if (error) throw new Error(error.message)
 }
 
@@ -154,7 +154,20 @@ export function useBlocks(fromDate: string, toDate: string) {
 }
 
 export function invalidateAll(qc: QueryClient) {
-  for (const k of ['appointments', 'blocks', 'client-context', 'clients-search', 'availability']) {
+  for (const k of [
+    'appointments',
+    'blocks',
+    'client-context',
+    'clients-search',
+    'availability',
+    'client-row',
+    'client-spend',
+    'client-appts',
+    'packages',
+    'package-sessions',
+    'package-templates',
+    'needs-return',
+  ]) {
     void qc.invalidateQueries({ queryKey: [k] })
   }
 }

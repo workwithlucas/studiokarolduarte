@@ -1,0 +1,15 @@
+﻿nome;telefone;aniversario;codigo;observacoes;credito
+ZZ Maria Aparecida Souza;(11) 98111-0001;14/03/1985;ZZ-C001;Prefere manhã;0
+ZZ Ana Clara Souza;(11) 98111-0001;02/09/2012;;Filha da Maria;
+ZZ Terezinha Alves;11 98222-0002;;;;
+ZZ Teresinha Alves;11982220002;1970-07-21;;Cliente antiga;
+ZZ João Batista Lima;+55 11 98333-0003;;ZZ-C003;;
+ZZ Joana Ferreira;(21) 99555-0005;10/10/1992;;;
+ZZ Sem Telefone;;05/12/1990;;;
+ZZ Telefone Inválido;12345;;;Ligar depois;
+ZZ Carla Crédito;(11) 98777-0007;;ZZ-C004;Cliente VIP;R$ 150,00
+ZZ Duplicada de Código;(11) 98888-0008;;ZZ-C003;;
+;(11) 98999-0009;;;;
+ZZ Luíza Conceição;(11) 97111-0010;29/02/2000;;;
+ZZ Beatriz Nascimento;(11) 97222-0011;31/02/1999;;;
+ZZ Ângela Ávila;(11) 97333-0012;1988-11-03;ZZ-C005;Alérgica a látex;

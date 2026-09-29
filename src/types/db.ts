@@ -149,6 +149,13 @@ export type Database = {
             foreignKeyName: "appointments_client_id_fkey"
             columns: ["client_id"]
             isOneToOne: false
+            referencedRelation: "v_client_directory"
+            referencedColumns: ["client_id"]
+          },
+          {
+            foreignKeyName: "appointments_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
             referencedRelation: "v_client_stats"
             referencedColumns: ["client_id"]
           },
@@ -252,6 +259,13 @@ export type Database = {
             foreignKeyName: "client_packages_client_id_fkey"
             columns: ["client_id"]
             isOneToOne: false
+            referencedRelation: "v_client_directory"
+            referencedColumns: ["client_id"]
+          },
+          {
+            foreignKeyName: "client_packages_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
             referencedRelation: "v_client_stats"
             referencedColumns: ["client_id"]
           },
@@ -348,6 +362,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "clients"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ledger_entries_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_directory"
+            referencedColumns: ["client_id"]
           },
           {
             foreignKeyName: "ledger_entries_client_id_fkey"
@@ -626,6 +647,31 @@ export type Database = {
       }
     }
     Views: {
+      v_client_directory: {
+        Row: {
+          archived: boolean | null
+          birthday: string | null
+          client_id: string | null
+          days_since_last_visit: number | null
+          last_visit_at: string | null
+          name: string | null
+          needs_return: boolean | null
+          next_appointment_at: string | null
+          phone_e164: string | null
+          preferred_professional_id: string | null
+          segment: string | null
+          visit_count: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "appointments_professional_id_fkey"
+            columns: ["preferred_professional_id"]
+            isOneToOne: false
+            referencedRelation: "professionals"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       v_client_packages: {
         Row: {
           client_id: string | null
@@ -645,6 +691,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "clients"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "client_packages_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_directory"
+            referencedColumns: ["client_id"]
           },
           {
             foreignKeyName: "client_packages_client_id_fkey"
@@ -698,6 +751,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "clients"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "appointments_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_directory"
+            referencedColumns: ["client_id"]
           },
           {
             foreignKeyName: "appointments_client_id_fkey"
@@ -805,6 +865,13 @@ export type Database = {
         Args: { p_appointment_id: string; p_reason: string }
         Returns: undefined
       }
+      rpc_client_spend: {
+        Args: { p_client_ids?: string[] }
+        Returns: {
+          client_id: string
+          total_spent_cents: number
+        }[]
+      }
       rpc_complete_appointment: {
         Args: { p_actual_end?: string; p_appointment_id: string }
         Returns: undefined
@@ -872,6 +939,29 @@ export type Database = {
         }
         Returns: undefined
       }
+      rpc_search_clients: {
+        Args: {
+          p_filter?: string
+          p_limit?: number
+          p_offset?: number
+          p_query?: string
+        }
+        Returns: {
+          archived: boolean
+          birthday: string
+          client_id: string
+          days_since_last_visit: number
+          last_visit_at: string
+          name: string
+          needs_return: boolean
+          next_appointment_at: string
+          phone_e164: string
+          preferred_professional_id: string
+          segment: string
+          total_count: number
+          visit_count: number
+        }[]
+      }
       rpc_sell_package: {
         Args: { p_client_id: string; p_template_id: string }
         Returns: string
@@ -893,6 +983,17 @@ export type Database = {
           professional_id: string
           visits: number
         }[]
+      }
+      rpc_update_client: {
+        Args: {
+          p_archived: boolean
+          p_birthday: string
+          p_client_id: string
+          p_name: string
+          p_notes: string
+          p_phone: string
+        }
+        Returns: string
       }
       rpc_upsert_addon: {
         Args: {
@@ -958,6 +1059,7 @@ export type Database = {
       show_limit: { Args: never; Returns: number }
       show_trgm: { Args: { "": string }; Returns: string[] }
       today_sp: { Args: never; Returns: string }
+      unaccent: { Args: { "": string }; Returns: string }
     }
     Enums: {
       app_role: "owner" | "professional"

@@ -24,7 +24,7 @@ Vite + React + TypeScript + Tailwind. Supabase (Postgres, Auth, Edge Functions).
 
 \- Never read or write .env\*. Never commit keys. Never push or link a remote unless told.
 
-
+- Money visibility: professionals never receive ledger-derived money (spend, totals). Gate in the DB, not only the UI.
 
 \## Workflow
 

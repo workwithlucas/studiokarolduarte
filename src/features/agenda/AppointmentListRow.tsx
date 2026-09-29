@@ -3,7 +3,7 @@ import { Pill } from '../../components/ui'
 import { formatDayShort, formatTime, ymdOf } from '../../lib/datetime'
 import { toTitlePt } from '../../lib/format'
 import type { AppointmentRow } from '../../lib/queries'
-import { serviceLine, StatusPill } from './common'
+import { PackagePill, serviceLine, StatusPill } from './common'
 
 /** One appointment as a list row: time, client, service·action, professional pill, status pill. */
 export function AppointmentListRow({
@@ -30,6 +30,7 @@ export function AppointmentListRow({
           <div className="mt-2 flex flex-wrap gap-2">
             <Pill color={a.professional?.color}>{toTitlePt(a.professional?.name)}</Pill>
             <StatusPill status={a.status} />
+            <PackagePill a={a} />
           </div>
         </div>
       </button>

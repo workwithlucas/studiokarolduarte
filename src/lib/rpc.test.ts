@@ -18,14 +18,16 @@ const CODES: ErrorCode[] = [
   'BLOCK_CONFLICT',
   'NOT_FOUND',
   'FORBIDDEN',
+  'INVALID_PHONE',
+  'DUPLICATE_CLIENT',
 ]
 
 afterEach(() => vi.restoreAllMocks())
 
 describe('error mapping', () => {
-  it('covers all 16 codes', () => {
+  it('covers all 18 codes', () => {
     expect(Object.keys(ERROR_MESSAGES).sort()).toEqual([...CODES].sort())
-    expect(CODES).toHaveLength(16)
+    expect(CODES).toHaveLength(18)
   })
 
   it.each(CODES)('%s maps to its pt-BR message', async (code) => {

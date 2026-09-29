@@ -71,7 +71,7 @@ export function Sheet({
             exit={hidden}
             transition={{ duration: 0.24, ease: 'easeOut' }}
           >
-            <header className="flex items-start justify-between gap-3 border-b border-line px-5 pb-3 pt-5">
+            <header className="flex items-start justify-between gap-3 border-b border-line px-5 pb-3 pt-[max(1.25rem,env(safe-area-inset-top))]">
               <div>
                 {kicker && <p className="label-caps mb-1">{kicker}</p>}
                 <h2 className="title-serif text-2xl">{title}</h2>
@@ -80,8 +80,8 @@ export function Sheet({
                 <X size={22} />
               </button>
             </header>
-            <div className="flex-1 overflow-y-auto px-5 py-5">{children}</div>
-            {footer && <footer className="border-t border-line px-5 py-4">{footer}</footer>}
+            <div className="flex-1 overflow-y-auto px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-5">{children}</div>
+            {footer && <footer className="border-t border-line px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4">{footer}</footer>}
           </motion.div>
         </div>
       )}

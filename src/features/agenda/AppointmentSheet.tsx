@@ -5,7 +5,7 @@ import { formatDayLong, formatTime, todaySP, toSaoPauloISO, ymdOf } from '../../
 import { formatPhoneBR, toTitlePt } from '../../lib/format'
 import { invalidateAll, useAvailability, useSuggestedProfessionals, type AppointmentRow } from '../../lib/queries'
 import { messageOf, rpc } from '../../lib/rpc'
-import { serviceLine, StatusPill } from './common'
+import { PackagePill, serviceLine, StatusPill } from './common'
 
 export type SheetMode = 'view' | 'reschedule' | 'cancel' | 'complete'
 
@@ -68,6 +68,7 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
       <div className="flex flex-wrap gap-2">
         <StatusPill status={a.status} />
         <Pill color={a.professional?.color}>{toTitlePt(a.professional?.name)}</Pill>
+        <PackagePill a={a} />
       </div>
       <dl className="space-y-4">
         <Info label="Telefone" value={formatPhoneBR(a.client?.phone_e164)} />

@@ -1,6 +1,6 @@
 import { Check } from 'lucide-react'
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import { StatusPill } from './common'
+import { PackagePill, StatusPill, usePackageSlot } from './common'
 import { minutesOfDaySP, minutesSinceDayStart, minutesToHHMM, todaySP, formatTime, ymdOf } from '../../lib/datetime'
 import { actionLabel, safeColor, toTitlePt } from '../../lib/format'
 import { clamp, gridHeightPx, minutesToPx, nonWorkingSegments, PX_PER_MIN, ROW_PX, slotFromPx, type Bounds } from '../../lib/grid'
@@ -342,6 +342,7 @@ function CardContent({ a, h }: { a: AppointmentRow; h: number }) {
   const range = `${formatTime(a.starts_at)}–${formatTime(a.ends_at)}`
   const client = toTitlePt(a.client?.name)
   const svc = `${toTitlePt(a.service?.name)} · ${actionLabel(a.action)}`
+  const pkgSlot = usePackageSlot(a)
   const check = a.status === 'confirmed' && <Check size={12} className="shrink-0 text-success" aria-label="Confirmado" />
 
   if (h < 40) {
@@ -356,14 +357,15 @@ function CardContent({ a, h }: { a: AppointmentRow; h: number }) {
   return (
     <div className="flex h-full flex-col">
       <p className="flex items-center justify-between gap-1 text-[10px] leading-4 text-muted">
-        <span>{range}</span>
+        <span>{h < 92 && pkgSlot ? `${range} · Pacote ${pkgSlot}` : range}</span>
         {check}
       </p>
       <p className="title-serif truncate text-[15px] leading-5">{client}</p>
       {h >= 64 && <p className="truncate text-[11px] leading-4 text-muted">{svc}</p>}
       {h >= 92 && (
-        <div className="mt-auto pb-1">
+        <div className="mt-auto flex flex-wrap gap-1 pb-1">
           <StatusPill status={a.status} />
+          <PackagePill a={a} />
         </div>
       )}
     </div>

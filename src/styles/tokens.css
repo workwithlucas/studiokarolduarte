@@ -74,6 +74,7 @@
     font-family: var(--font-body);
     font-weight: 400;
     -webkit-font-smoothing: antialiased;
+    overscroll-behavior: none;
   }
   b,
   strong,

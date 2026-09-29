@@ -271,7 +271,10 @@ begin
   insert into pg_temp.res select 'pro_ledger_rows', count(*)::text from ledger_entries;
   insert into pg_temp.res select 'pro_audit_rows', count(*)::text from audit_log;
   insert into pg_temp.res select 'pro_appt_rows', (count(*) > 0)::text from appointments;
-  insert into pg_temp.res select 'pro_stats_rows', (count(*) > 0)::text from v_client_stats;
+  begin
+    perform 1 from v_client_stats;
+    insert into pg_temp.res values ('pro_stats_rows', 'no_error');
+  exception when others then insert into pg_temp.res values ('pro_stats_rows', sqlstate); end;
   begin
     insert into clients (name) values ('direto');
     insert into pg_temp.res values ('pro_insert', 'no_error');
@@ -296,7 +299,7 @@ select is((select v from res where k = 'pro_invariants'), 'FORBIDDEN', 'professi
 select is((select v from res where k = 'pro_ledger_rows'), '0', 'professional: cannot SELECT ledger_entries');
 select is((select v from res where k = 'pro_audit_rows'), '0', 'professional: cannot SELECT audit_log');
 select is((select v from res where k = 'pro_appt_rows'), 'true', 'professional: can SELECT appointments');
-select is((select v from res where k = 'pro_stats_rows'), 'true', 'professional: can SELECT v_client_stats');
+select is((select v from res where k = 'pro_stats_rows'), '42501', 'professional: SELECT v_client_stats denied');
 select is((select v from res where k = 'pro_insert'), '42501', 'authenticated: INSERT denied');
 select is((select v from res where k = 'pro_update'), '42501', 'authenticated: UPDATE denied');
 select is((select v from res where k = 'pro_delete'), '42501', 'authenticated: DELETE denied');

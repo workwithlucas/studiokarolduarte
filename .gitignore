@@ -4,3 +4,6 @@ node_modules
 dist
 supabase/.temp
 *.log
+
+*.csv
+!tests/fixtures/*.csv

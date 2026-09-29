@@ -22,6 +22,8 @@ export const ERROR_MESSAGES = {
   BLOCK_CONFLICT: 'Há agendamentos dentro do período bloqueado.',
   NOT_FOUND: 'Registro não encontrado.',
   FORBIDDEN: 'Você não tem permissão para esta ação.',
+  INVALID_PHONE: 'Telefone inválido. Use DDD + número.',
+  DUPLICATE_CLIENT: 'Já existe uma cliente com este nome e telefone.',
 } as const
 
 export type ErrorCode = keyof typeof ERROR_MESSAGES
@@ -73,6 +75,9 @@ export const rpc = {
   upsertClient: (a: Args<'rpc_upsert_client'>) => call('rpc_upsert_client', a),
   findClientByPhone: (a: Args<'rpc_find_client_by_phone'>) => call('rpc_find_client_by_phone', a),
   getClientContext: (a: Args<'rpc_get_client_context'>) => call('rpc_get_client_context', a),
+  searchClients: (a: Args<'rpc_search_clients'>) => call('rpc_search_clients', a),
+  clientSpend: (a: Args<'rpc_client_spend'>) => call('rpc_client_spend', a),
+  updateClient: (a: Args<'rpc_update_client'>) => call('rpc_update_client', a),
   sellPackage: (a: Args<'rpc_sell_package'>) => call('rpc_sell_package', a),
   voidPackage: (a: Args<'rpc_void_package'>) => call('rpc_void_package', a),
   // agenda (staff / agent)

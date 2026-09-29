@@ -8,6 +8,7 @@ import { AppointmentSheet } from '../features/agenda/AppointmentSheet'
 import { NewAppointmentSheet } from '../features/agenda/NewAppointmentSheet'
 import { formatDayLong, formatTime, todaySP } from '../lib/datetime'
 import { firstName, toTitlePt } from '../lib/format'
+import { useNeedsReturnCount } from '../lib/clientQueries'
 import { useAgendaRealtime, useAppointments, useProfessionals, useToConfirm, type AppointmentRow } from '../lib/queries'
 
 export function HomePage() {
@@ -18,6 +19,7 @@ export function HomePage() {
   const pros = useProfessionals()
   const appts = useAppointments(today, today)
   const toConfirm = useToConfirm()
+  const needsReturn = useNeedsReturnCount()
   const [filter, setFilter] = useState<string>('all')
   const [selected, setSelected] = useState<AppointmentRow | null>(null)
   const [newOpen, setNewOpen] = useState(false)
@@ -59,7 +61,7 @@ export function HomePage() {
         </ChipRow>
       )}
 
-      <section className="grid gap-4 sm:grid-cols-3">
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard kicker="Hoje" loading={appts.isLoading}>
           <p className="title-serif text-4xl">{open.length}</p>
         </StatCard>
@@ -77,6 +79,12 @@ export function HomePage() {
           <p className="title-serif text-4xl">{pendingCount}</p>
           <Link to="/agenda?tab=confirmar" className="label-caps hit inline-flex items-center !text-ink underline">
             Ver na agenda
+          </Link>
+        </StatCard>
+        <StatCard kicker="A retornar" loading={needsReturn.isLoading}>
+          <p className="title-serif text-4xl">{needsReturn.data ?? 0}</p>
+          <Link to="/clientes?tab=retornar" className="label-caps hit inline-flex items-center !text-ink underline">
+            Ver clientes
           </Link>
         </StatCard>
       </section>
