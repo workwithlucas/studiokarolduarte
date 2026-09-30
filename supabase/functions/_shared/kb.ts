@@ -11,10 +11,8 @@ export const KB = `BASE DE CONHECIMENTO DO STUDIO
 - "Esmaltação em gel" é o serviço Manicure com gel.
 - Tem gel magnético.
 
-TODO: endereço e como chegar.
-TODO: estacionamento.
-TODO: política de cancelamento e falta.
+Endereço e como chegar: R. José Siqueira, 180 - SL 01 - Dom Bosco, Itajaí - SC, 88307-310.
 TODO: o que está incluso em blindagem, gel e alongamento.`
 
 /** For the go-live checklist and the task summary. */
-export const KB_TODOS = ['endereço e como chegar', 'estacionamento', 'política de cancelamento e falta', 'o que está incluso em blindagem, gel e alongamento']
+export const KB_TODOS = ['o que está incluso em blindagem, gel e alongamento']
