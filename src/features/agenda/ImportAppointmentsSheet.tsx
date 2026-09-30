@@ -204,7 +204,7 @@ function Flow({ onClose }: { onClose: () => void }) {
           Importando… {step.done}/{step.total}
         </p>
         <div className="h-3 overflow-hidden rounded-full bg-line" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-          <div className="h-full [background:var(--primary-gradient)]" style={{ width: `${pct}%` }} />
+          <div className="h-full bg-primary-bg" style={{ width: `${pct}%` }} />
         </div>
       </div>
     )

@@ -213,7 +213,7 @@ export function TimeGrid({ columns, bounds, appointments, blocks, onSlotTap, onC
             <div key={col.key} className="min-w-0 flex-1 border-l border-line" style={{ minWidth: COL_MIN_W }}>
               <div
                 className={`sticky top-0 z-20 flex h-14 flex-col justify-center border-b border-line px-3 ${
-                  col.today ? 'bg-gold/20' : 'bg-surface'
+                  col.today ? 'bg-gold-soft' : 'bg-surface'
                 }`}
               >
                 <span className="flex items-center gap-2">
@@ -231,7 +231,7 @@ export function TimeGrid({ columns, bounds, appointments, blocks, onSlotTap, onC
                 className="relative"
                 style={{
                   height,
-                  backgroundImage: `repeating-linear-gradient(to bottom, transparent 0 ${ROW_PX * 4 - 1}px, #EFE3DA ${ROW_PX * 4 - 1}px ${ROW_PX * 4}px), repeating-linear-gradient(to bottom, transparent 0 ${ROW_PX - 1}px rgb(239 227 218 / 0.45) ${ROW_PX - 1}px ${ROW_PX}px)`,
+                  backgroundImage: `repeating-linear-gradient(to bottom, transparent 0 ${ROW_PX * 4 - 1}px, var(--border) ${ROW_PX * 4 - 1}px ${ROW_PX * 4}px), repeating-linear-gradient(to bottom, transparent 0 ${ROW_PX - 1}px color-mix(in srgb, var(--border) 45%, transparent) ${ROW_PX - 1}px ${ROW_PX}px)`,
                 }}
                 onPointerDown={tapDown}
                 onPointerUp={(e) => {
@@ -244,7 +244,7 @@ export function TimeGrid({ columns, bounds, appointments, blocks, onSlotTap, onC
                 {segs.map((s) => (
                   <div
                     key={s.start}
-                    className="pointer-events-none absolute inset-x-0 bg-ink/[0.06]"
+                    className="pointer-events-none absolute inset-x-0 bg-shade"
                     style={{ top: minutesToPx(s.start, bounds.startMin), height: (s.end - s.start) * PX_PER_MIN }}
                   />
                 ))}
@@ -272,7 +272,7 @@ export function TimeGrid({ columns, bounds, appointments, blocks, onSlotTap, onC
                         top: minutesToPx(s, bounds.startMin),
                         height: (en - s) * PX_PER_MIN,
                         backgroundImage:
-                          'repeating-linear-gradient(45deg, rgb(139 123 127 / 0.16) 0 6px, rgb(139 123 127 / 0.05) 6px 12px)',
+                          'repeating-linear-gradient(45deg, var(--border) 0 2px, transparent 2px 8px)',
                       }}
                     >
                       <span className="label-caps">{b.reason || 'Bloqueado'}</span>
@@ -302,8 +302,8 @@ export function TimeGrid({ columns, bounds, appointments, blocks, onSlotTap, onC
                       style={{
                         top: top + 1,
                         height: h,
-                        backgroundColor: `${color}2E`,
-                        borderLeft: `4px solid ${color}`,
+                        backgroundColor: `color-mix(in srgb, ${color} 16%, var(--surface))`,
+                        borderLeft: `3px solid ${color}`,
                         WebkitTouchCallout: 'none',
                         cursor: 'grab',
                       }}
@@ -323,10 +323,10 @@ export function TimeGrid({ columns, bounds, appointments, blocks, onSlotTap, onC
 
                 {col.today && nowMin >= bounds.startMin && nowMin <= bounds.endMin && (
                   <div
-                    className="pointer-events-none absolute inset-x-0 z-10 border-t-2 border-danger"
+                    className="pointer-events-none absolute inset-x-0 z-10 border-t border-gold"
                     style={{ top: minutesToPx(nowMin, bounds.startMin) }}
                   >
-                    <span className="absolute -left-1 -top-[5px] size-2 rounded-full bg-danger" />
+                    <span className="absolute -left-1 -top-[4px] size-2 rounded-full bg-gold" />
                   </div>
                 )}
               </div>
@@ -382,7 +382,7 @@ function GhostCard({ a, startMin, bounds }: { a?: AppointmentRow; startMin: numb
         top: minutesToPx(startMin, bounds.startMin) + 1,
         height: Math.max(a.duration_min * PX_PER_MIN, ROW_PX) - 2,
         borderColor: color,
-        backgroundColor: `${color}40`,
+        backgroundColor: `color-mix(in srgb, ${color} 25%, var(--surface))`,
       }}
     >
       {minutesToHHMM(startMin)}–{minutesToHHMM(startMin + a.duration_min)}

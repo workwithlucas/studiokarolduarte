@@ -3,10 +3,10 @@ import type { ButtonHTMLAttributes, ReactNode } from 'react'
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
 
 const VARIANTS: Record<Variant, string> = {
-  primary: 'text-surface shadow-card [background:var(--primary-gradient)]',
-  secondary: 'border border-line bg-surface text-ink',
+  primary: 'bg-primary-bg text-primary-ink',
+  secondary: 'border border-line bg-transparent text-ink',
   ghost: 'bg-transparent text-ink',
-  danger: 'bg-danger text-surface',
+  danger: 'bg-danger text-primary-ink',
 }
 
 interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {

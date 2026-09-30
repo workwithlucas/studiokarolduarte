@@ -1,7 +1,7 @@
 insert into professionals (name, role, color) values
-  ('Karol Duarte', 'owner', '#b8577a'),
-  ('Mara', 'professional', '#4f8a8b'),
-  ('Milena', 'professional', '#c9a227');
+  ('Karol Duarte', 'owner', '#C9A96A'),
+  ('Mara', 'professional', '#7F9BB5'),
+  ('Milena', 'professional', '#B58C93');
 
 -- PLACEHOLDER: edit in Task 2
 insert into working_hours (professional_id, weekday, start_time, end_time)

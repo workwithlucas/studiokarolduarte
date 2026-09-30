@@ -8,7 +8,7 @@ export function TabLabel({ active, onClick, children }: { active: boolean; onCli
       aria-selected={active}
       onClick={onClick}
       className={`label-caps hit shrink-0 rounded-full px-4 transition-colors duration-200 ${
-        active ? 'bg-ink !text-surface' : 'bg-transparent'
+        active ? 'border border-border-gold bg-surface-2 !text-ink' : 'border border-transparent bg-transparent'
       }`}
     >
       {children}

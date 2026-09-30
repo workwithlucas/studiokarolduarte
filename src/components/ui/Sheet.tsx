@@ -53,7 +53,7 @@ export function Sheet({
       {open && (
         <div className="fixed inset-0 z-[60]" role="dialog" aria-modal="true" aria-label={title}>
           <motion.div
-            className="absolute inset-0 bg-ink/40"
+            className="absolute inset-0 bg-scrim"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -73,7 +73,12 @@ export function Sheet({
           >
             <header className="flex items-start justify-between gap-3 border-b border-line px-5 pb-3 pt-[max(1.25rem,env(safe-area-inset-top))]">
               <div>
-                {kicker && <p className="label-caps mb-1">{kicker}</p>}
+                {kicker && (
+                  <p className="label-caps mb-1 flex items-center gap-2">
+                    <span aria-hidden className="size-1.5 rounded-full bg-gold" />
+                    {kicker}
+                  </p>
+                )}
                 <h2 className="title-serif text-2xl">{title}</h2>
               </div>
               <button type="button" aria-label="Fechar" onClick={onClose} className="hit inline-flex items-center justify-center rounded-full">

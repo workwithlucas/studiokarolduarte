@@ -5,10 +5,10 @@ import { Button, Chip, ChipRow, FieldLabel, Input, Kicker, Sheet, Toggle, useSna
 import { hhmmToMinutes } from '../../lib/datetime'
 import { categoryLabel, safeColor, toTitlePt } from '../../lib/format'
 import { invalidateCatalog, useProfessionalServices, useServices, useWorkingHours, type Professional } from '../../lib/queries'
+import { PROF_PALETTE } from '../../lib/palette'
 import { messageOf, rpc } from '../../lib/rpc'
 
 // ---------------------------------------------------------------- name + colour
-const SWATCHES = ['#B57A88', '#6F8F7A', '#C9963F', '#5A2138', '#7C8FB5', '#B5473F', '#8B6FA8', '#4F8A8B']
 
 /** `pro` null = new professional (p_id null creates role 'professional'). */
 export function ProfessionalFormSheet({ open, pro, onClose }: { open: boolean; pro: Professional | null; onClose: () => void }) {
@@ -23,7 +23,7 @@ function NameColorForm({ pro, onClose }: { pro: Professional | null; onClose: ()
   const qc = useQueryClient()
   const snack = useSnackbar()
   const [name, setName] = useState(pro?.name ?? '')
-  const [color, setColor] = useState(safeColor(pro?.color, SWATCHES[0]))
+  const [color, setColor] = useState(safeColor(pro?.color, PROF_PALETTE[0]))
   const [pending, setPending] = useState(false)
 
   async function save() {
@@ -49,19 +49,12 @@ function NameColorForm({ pro, onClose }: { pro: Professional | null; onClose: ()
       <div>
         <FieldLabel>Cor</FieldLabel>
         <ChipRow>
-          {SWATCHES.map((c) => (
+          {PROF_PALETTE.map((c) => (
             <Chip key={c} dot={c} selected={color.toLowerCase() === c.toLowerCase()} onClick={() => setColor(c)}>
               {' '}
             </Chip>
           ))}
         </ChipRow>
-        <input
-          type="color"
-          aria-label="Cor personalizada"
-          value={color}
-          onChange={(e) => setColor(e.target.value)}
-          className="hit mt-3 w-full cursor-pointer rounded-[var(--radius-input)] border border-line bg-surface p-1"
-        />
       </div>
       <Button block disabled={name.trim().length < 2} loading={pending} onClick={() => void save()}>
         Salvar

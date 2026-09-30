@@ -27,7 +27,7 @@ export function Avatar({ name }: { name: string | null | undefined }) {
   return (
     <span
       aria-hidden="true"
-      className="title-serif inline-flex size-11 shrink-0 items-center justify-center rounded-full text-base !text-surface [background:var(--primary-gradient)]"
+      className="title-serif inline-flex size-11 shrink-0 items-center justify-center rounded-full text-base !text-primary-ink bg-primary-bg"
     >
       {initials(name)}
     </span>

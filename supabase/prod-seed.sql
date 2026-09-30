@@ -5,9 +5,9 @@
 insert into professionals (name, role, color)
 select v.name, v.role::app_role, v.color
 from (values
-  ('Karol Duarte', 'owner', '#B57A88'),
-  ('Mara', 'professional', '#6F8F7A'),
-  ('Milena', 'professional', '#C9963F')
+  ('Karol Duarte', 'owner', '#C9A96A'),
+  ('Mara', 'professional', '#7F9BB5'),
+  ('Milena', 'professional', '#B58C93')
 ) as v (name, role, color)
 where not exists (select 1 from professionals p where p.name = v.name);
 

@@ -25,7 +25,7 @@ export function AppLayout() {
 
   return (
     <div className="min-h-dvh lg:flex">
-      <aside className="sticky top-0 hidden h-dvh w-64 shrink-0 flex-col border-r border-line bg-surface/70 p-6 lg:flex">
+      <aside className="sticky top-0 hidden h-dvh w-64 shrink-0 flex-col border-r border-line bg-surface p-6 lg:flex">
         <p className="title-serif mb-8 text-2xl">Studio Karol Duarte</p>
         <nav className="flex flex-1 flex-col gap-1">
           {sidebar.map(({ to, label, icon: Icon, end }) => (
@@ -35,7 +35,7 @@ export function AppLayout() {
               end={end}
               className={({ isActive }) =>
                 `label-caps hit flex items-center gap-3 rounded-full px-4 transition-colors duration-200 ${
-                  isActive ? 'bg-ink !text-surface' : ''
+                  isActive ? 'border border-border-gold bg-surface-2 !text-ink' : 'border border-transparent'
                 }`
               }
             >

@@ -1,6 +1,9 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
+const tokens = readFileSync('src/styles/tokens.css', 'utf8')
+const bg = /--bg:\s*(#[0-9A-Fa-f]{6})/.exec(tokens)![1]!
+
 const manifest = JSON.parse(readFileSync('public/manifest.webmanifest', 'utf8')) as Record<string, unknown> & {
   icons: Array<{ src: string; sizes: string; type: string; purpose?: string }>
 }
@@ -15,8 +18,8 @@ describe('manifest', () => {
       display: 'standalone',
       orientation: 'any',
       lang: 'pt-BR',
-      background_color: '#FBF1EC',
-      theme_color: '#5A2138',
+      background_color: bg,
+      theme_color: bg,
     })
   })
 

@@ -81,7 +81,7 @@ export function AgentPage() {
               role="radio"
               aria-checked={s.agent_mode === m}
               onClick={() => (m === 'live' && s.agent_mode !== 'live' ? setConfirmLive(true) : m !== s.agent_mode && void save({ agent_mode: m }, `Agente: ${MODE_LABEL[m]}`))}
-              className={`label-caps hit rounded-full px-2 transition-colors duration-200 ${s.agent_mode === m ? 'bg-ink !text-surface' : ''}`}
+              className={`label-caps hit rounded-full px-2 transition-colors duration-200 ${s.agent_mode === m ? 'bg-surface-2 !text-ink ring-1 ring-border-gold' : ''}`}
             >
               {MODE_LABEL[m]}
             </button>

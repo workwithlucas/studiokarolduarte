@@ -1,4 +1,5 @@
 // Display helpers. Never used for stored data.
+import { PROF_PALETTE } from './palette'
 
 const LOWER = new Set(['de', 'da', 'do', 'das', 'dos', 'e', 'em', 'para', 'com', 'a', 'o', 'as', 'os'])
 
@@ -68,6 +69,6 @@ export function firstName(name: string | null | undefined): string {
 }
 
 /** Hex colour guard for values coming from the database. */
-export function safeColor(c: string | null | undefined, fallback = '#B57A88'): string {
+export function safeColor(c: string | null | undefined, fallback = PROF_PALETTE[0] ?? ''): string {
   return typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c) ? c : fallback
 }
