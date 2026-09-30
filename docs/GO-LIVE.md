@@ -19,8 +19,9 @@ Regras deste roteiro:
 6. Usuários do Auth (passos 12 e 13)
 7. Importar clientes (passo 18)
 8. Importar agendamentos (passo 19)
-9. Agente em modo *Teste* (passo 20)
-10. Agente em modo *No ar* (passo 21)
+9. Financeiro: comissões e o "a receber" antigo (passo 19b)
+10. Agente em modo *Teste* (passo 20)
+11. Agente em modo *No ar* (passo 21)
 
 Os demais passos (contas, Vault do cron, hospedagem do app, webhook da Z-API) entram no meio dessa ordem, na numeração abaixo. O app precisa estar publicado (passos 14 e 15) antes das importações, porque elas são feitas por ele.
 
@@ -177,7 +178,7 @@ Enquanto os dois segredos do Vault não existirem, os jobs não fazem nada.
 
 ## Parte C: dados iniciais e usuários
 
-**11. Dados iniciais (profissionais, horários, configurações).** No *SQL Editor*, cole o conteúdo de `supabase/prod-seed.sql` e execute. Ele é idempotente e não cria dados de teste. Os serviços, adicionais e vínculos das profissionais são criados depois, pelo próprio app (menus *Catálogo* e *Equipe*).
+**11. Dados iniciais (profissionais, horários, configurações).** No *SQL Editor*, cole o conteúdo de `supabase/prod-seed.sql` e execute. Ele é idempotente e não cria dados de teste. Ele também grava as regras de comissão (a parte que fica com a profissional): Karol 58% em tudo, Mara 50% em tudo, Milena 65% em unhas e 70% em cílios e sobrancelhas (sem regra para "outros"). Rodar de novo não sobrescreve percentuais que você já mudou no app. Os serviços, adicionais e vínculos das profissionais são criados depois, pelo próprio app (menus *Catálogo* e *Equipe*).
 
 **12. Crie os usuários de produção** (Karol, Mara e Milena): *Authentication* > *Users* > *Add user* > *Create new user*. Use o e-mail de cada uma, uma senha forte digitada por você e marque *Auto Confirm User*.
 
@@ -265,6 +266,13 @@ O agente sai de fábrica **Desligado**. Não pule etapas:
 **19. Importe os agendamentos futuros.** A Thaís só enxerga a agenda que está no sistema: sem os horários já marcados ela pode oferecer horários ocupados no sistema antigo. Só siga depois disso.
 
 *Agenda* > *Importar* (CSV, XLS ou XLSX). Colunas: cliente, inicio (ou data e hora separadas), servico, profissional; opcionais: telefone, fim, status, valor, observacao. Antes de importar, os serviços e as profissionais do arquivo precisam existir em *Catálogo* e *Equipe*: linhas com serviço ou profissional desconhecido são ignoradas e listadas, nada é criado. Duração e valor vêm do catálogo. Só entram horários futuros e não cancelados. Importar o mesmo arquivo de novo não cria nada. No fim, baixe a lista de erros e ajuste o que ficou de fora.
+
+**19b. Financeiro (só a Karol vê).** Menu *Financeiro* (em *Mais*, no celular).
+
+1. **Comissões.** *Equipe* > *Comissão* em cada profissional: confira os percentuais por categoria ("Todas" vale para categorias sem regra). Atendimentos concluídos sem regra aparecem num aviso no topo do *Financeiro*; ao salvar a regra eles são preenchidos sozinhos. Mudar um percentual depois não altera comissões já calculadas.
+2. **Importar o "a receber" antigo.** *Financeiro* > *Importar* (só CSV). Colunas: `cliente` (ou `nome`), `vencimento` (ou `data`), `valor`; opcional: `descricao` (ou `obs`). A cliente precisa já estar em *Clientes* (faça o passo 18 antes): linhas sem correspondência, com data ou valor inválido são ignoradas e listadas, nada é criado. Confira o resumo, confirme, e baixe a lista de erros no final. Importar o mesmo arquivo de novo não cria nada.
+3. **Conferir.** Em *A receber*, o bloco *Vencidos* traz o que já passou do vencimento, inclusive de meses anteriores. Dê baixa em cada item pelo menu "..." (*Dar baixa*): informe desconto e forma de pagamento (pode dividir em Pix, dinheiro, débito, crédito e permuta) ou receba só uma parte.
+4. **Dia a dia.** Ao concluir um atendimento pela agenda, a Karol vê a tela de recebimento (*Concluir e receber* ou *Concluir, receber depois*). Recebimentos errados são desfeitos em *Extrato* > toque no pagamento > *Estornar*. Despesas: *+ Lançamento* > *Nova despesa*. Pacote vendido também abre o recebimento.
 
 **20. Modo Teste com o seu telefone.** No app, *Agente*: em *Teste* adicione o seu número (com DDD) e escolha *Teste*. Mande mensagens do seu celular e confira:
 

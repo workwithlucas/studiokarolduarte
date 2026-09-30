@@ -167,6 +167,10 @@ export function invalidateAll(qc: QueryClient) {
     'package-sessions',
     'package-templates',
     'needs-return',
+    'finance-summary',
+    'finance-list',
+    'finance-entry',
+    'commission-rules',
   ]) {
     void qc.invalidateQueries({ queryKey: [k] })
   }

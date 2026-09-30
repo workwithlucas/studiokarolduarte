@@ -26,6 +26,7 @@ Vite + React + TypeScript + Tailwind. Supabase (Postgres, Auth, Edge Functions).
 
 - Money visibility: professionals never receive ledger-derived money (spend, totals). Gate in the DB, not only the UI.
 - Agent: model proposes, code disposes. Every agent write passes a code gate. Ownership is checked in code, never in the prompt.
+- Finance is owner-only. Every money number comes from v_ledger through rpc_finance_*. No screen queries ledger tables directly.
 
 \## Workflow
 
@@ -42,4 +43,3 @@ Vite + React + TypeScript + Tailwind. Supabase (Postgres, Auth, Edge Functions).
 \- End of task: run tests, print summary, commit locally, stop.
 
 \- Prompt conflicts with these rules: stop and ask.
-

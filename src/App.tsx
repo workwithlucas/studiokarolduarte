@@ -4,6 +4,7 @@ import { Skeleton } from './components/ui'
 import { AppLayout } from './layout/AppLayout'
 import { AgentPage } from './pages/AgentPage'
 import { AgendaPage } from './pages/AgendaPage'
+import { FinanceiroPage } from './pages/FinanceiroPage'
 import { CatalogPage } from './pages/CatalogPage'
 import { ClientPage } from './pages/ClientPage'
 import { ClientesPage } from './pages/ClientesPage'
@@ -49,6 +50,14 @@ export function App() {
           element={
             <OwnerOnly>
               <TeamPage />
+            </OwnerOnly>
+          }
+        />
+        <Route
+          path="financeiro"
+          element={
+            <OwnerOnly>
+              <FinanceiroPage />
             </OwnerOnly>
           }
         />

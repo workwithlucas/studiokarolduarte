@@ -311,41 +311,100 @@ export type Database = {
         }
         Relationships: []
       }
+      commission_rules: {
+        Row: {
+          category: Database["public"]["Enums"]["service_category"] | null
+          id: string
+          percent: number
+          professional_id: string
+        }
+        Insert: {
+          category?: Database["public"]["Enums"]["service_category"] | null
+          id?: string
+          percent: number
+          professional_id: string
+        }
+        Update: {
+          category?: Database["public"]["Enums"]["service_category"] | null
+          id?: string
+          percent?: number
+          professional_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "commission_rules_professional_id_fkey"
+            columns: ["professional_id"]
+            isOneToOne: false
+            referencedRelation: "professionals"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ledger_entries: {
         Row: {
           amount_cents: number
           appointment_id: string | null
-          client_id: string
+          category: string | null
+          client_id: string | null
           client_package_id: string | null
+          commission_base_cents: number | null
+          commission_cents: number | null
+          commission_percent: number | null
           created_at: string
           description: string
+          discount_cents: number
           due_date: string
+          final_cents: number | null
           id: string
+          import_key: string | null
+          kind: Database["public"]["Enums"]["entry_kind"]
+          note: string | null
           professional_id: string | null
+          studio_cents: number | null
           voided_at: string | null
         }
         Insert: {
           amount_cents: number
           appointment_id?: string | null
-          client_id: string
+          category?: string | null
+          client_id?: string | null
           client_package_id?: string | null
+          commission_base_cents?: number | null
+          commission_cents?: number | null
+          commission_percent?: number | null
           created_at?: string
           description: string
+          discount_cents?: number
           due_date: string
+          final_cents?: number | null
           id?: string
+          import_key?: string | null
+          kind?: Database["public"]["Enums"]["entry_kind"]
+          note?: string | null
           professional_id?: string | null
+          studio_cents?: number | null
           voided_at?: string | null
         }
         Update: {
           amount_cents?: number
           appointment_id?: string | null
-          client_id?: string
+          category?: string | null
+          client_id?: string | null
           client_package_id?: string | null
+          commission_base_cents?: number | null
+          commission_cents?: number | null
+          commission_percent?: number | null
           created_at?: string
           description?: string
+          discount_cents?: number
           due_date?: string
+          final_cents?: number | null
           id?: string
+          import_key?: string | null
+          kind?: Database["public"]["Enums"]["entry_kind"]
+          note?: string | null
           professional_id?: string | null
+          studio_cents?: number | null
           voided_at?: string | null
         }
         Relationships: [
@@ -396,6 +455,54 @@ export type Database = {
             columns: ["professional_id"]
             isOneToOne: false
             referencedRelation: "professionals"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ledger_payments: {
+        Row: {
+          amount_cents: number
+          created_at: string
+          entry_id: string
+          id: string
+          method: Database["public"]["Enums"]["pay_method"]
+          paid_at: string
+          request_id: string | null
+          reversed_at: string | null
+        }
+        Insert: {
+          amount_cents: number
+          created_at?: string
+          entry_id: string
+          id?: string
+          method: Database["public"]["Enums"]["pay_method"]
+          paid_at?: string
+          request_id?: string | null
+          reversed_at?: string | null
+        }
+        Update: {
+          amount_cents?: number
+          created_at?: string
+          entry_id?: string
+          id?: string
+          method?: Database["public"]["Enums"]["pay_method"]
+          paid_at?: string
+          request_id?: string | null
+          reversed_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ledger_payments_entry_id_fkey"
+            columns: ["entry_id"]
+            isOneToOne: false
+            referencedRelation: "ledger_entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ledger_payments_entry_id_fkey"
+            columns: ["entry_id"]
+            isOneToOne: false
+            referencedRelation: "v_ledger"
             referencedColumns: ["id"]
           },
         ]
@@ -892,6 +999,86 @@ export type Database = {
           },
         ]
       }
+      v_ledger: {
+        Row: {
+          amount_cents: number | null
+          appointment_id: string | null
+          barter_paid_cents: number | null
+          cash_paid_cents: number | null
+          category: string | null
+          client_id: string | null
+          client_package_id: string | null
+          commission_base_cents: number | null
+          commission_cents: number | null
+          commission_percent: number | null
+          created_at: string | null
+          description: string | null
+          discount_cents: number | null
+          due_date: string | null
+          final_cents: number | null
+          id: string | null
+          import_key: string | null
+          kind: Database["public"]["Enums"]["entry_kind"] | null
+          note: string | null
+          open_cents: number | null
+          paid_cents: number | null
+          professional_id: string | null
+          status: string | null
+          studio_cents: number | null
+          voided_at: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ledger_entries_appointment_id_fkey"
+            columns: ["appointment_id"]
+            isOneToOne: false
+            referencedRelation: "appointments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ledger_entries_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ledger_entries_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_directory"
+            referencedColumns: ["client_id"]
+          },
+          {
+            foreignKeyName: "ledger_entries_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_stats"
+            referencedColumns: ["client_id"]
+          },
+          {
+            foreignKeyName: "ledger_entries_client_package_id_fkey"
+            columns: ["client_package_id"]
+            isOneToOne: false
+            referencedRelation: "client_packages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ledger_entries_client_package_id_fkey"
+            columns: ["client_package_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_packages"
+            referencedColumns: ["client_package_id"]
+          },
+          {
+            foreignKeyName: "ledger_entries_professional_id_fkey"
+            columns: ["professional_id"]
+            isOneToOne: false
+            referencedRelation: "professionals"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       v_professional_client_history: {
         Row: {
           client_id: string | null
@@ -937,9 +1124,17 @@ export type Database = {
         Args: { p_action: string; p_entity: string; p_entity_id: string }
         Returns: undefined
       }
+      _cat_key: {
+        Args: { c: Database["public"]["Enums"]["service_category"] }
+        Returns: string
+      }
       _cron_call: { Args: { p_function: string }; Returns: undefined }
       _cron_send_confirmations: { Args: never; Returns: undefined }
       _cron_wa_sweep: { Args: never; Returns: undefined }
+      _finance_result: {
+        Args: { p_entry_id: string; p_lines?: number; p_request_id?: string }
+        Returns: Json
+      }
       _is_service: { Args: never; Returns: boolean }
       _is_system: { Args: never; Returns: boolean }
       _jwt_claims: { Args: never; Returns: Json }
@@ -949,8 +1144,24 @@ export type Database = {
       }
       _name_key: { Args: { p: string }; Returns: string }
       _name_similarity: { Args: { a: string; b: string }; Returns: number }
+      _payment_lines: {
+        Args: { p_payments: Json }
+        Returns: {
+          amount_cents: number
+          method: Database["public"]["Enums"]["pay_method"]
+          n: number
+        }[]
+      }
+      _payment_request_id: {
+        Args: { p_n: number; p_request_id: string }
+        Returns: string
+      }
       _raise: {
         Args: { p_code: string; p_detail?: string }
+        Returns: undefined
+      }
+      _recompute_commission: {
+        Args: { p_entry_id: string }
         Returns: undefined
       }
       _require_agent: { Args: never; Returns: undefined }
@@ -1093,6 +1304,16 @@ export type Database = {
           total_spent_cents: number
         }[]
       }
+      rpc_complete_and_pay: {
+        Args: {
+          p_actual_end?: string
+          p_appointment_id: string
+          p_discount_cents?: number
+          p_payments?: Json
+          p_request_id?: string
+        }
+        Returns: Json
+      }
       rpc_complete_appointment: {
         Args: { p_actual_end?: string; p_appointment_id: string }
         Returns: undefined
@@ -1111,7 +1332,89 @@ export type Database = {
         }
         Returns: string
       }
+      rpc_create_manual_entry: {
+        Args: {
+          p_amount_cents: number
+          p_category: string
+          p_client_id?: string
+          p_description: string
+          p_due_date: string
+          p_import_key?: string
+          p_kind: Database["public"]["Enums"]["entry_kind"]
+          p_method?: Database["public"]["Enums"]["pay_method"]
+          p_pay_now?: boolean
+          p_professional_id?: string
+        }
+        Returns: string
+      }
       rpc_delete_block: { Args: { p_block_id: string }; Returns: undefined }
+      rpc_edit_entry: {
+        Args: {
+          p_amount_cents: number
+          p_category: string
+          p_description: string
+          p_due_date: string
+          p_entry_id: string
+        }
+        Returns: undefined
+      }
+      rpc_finance_entry: {
+        Args: { p_appointment_id?: string; p_client_package_id?: string }
+        Returns: Json
+      }
+      rpc_finance_import_keys: { Args: { p_keys: string[] }; Returns: string[] }
+      rpc_finance_list: {
+        Args: {
+          p_client_id?: string
+          p_from: string
+          p_include_reversed?: boolean
+          p_limit?: number
+          p_mode: string
+          p_offset?: number
+          p_professional_id?: string
+          p_query?: string
+          p_status?: string
+          p_to: string
+        }
+        Returns: {
+          amount_cents: number
+          appointment_id: string
+          appointment_starts_at: string
+          appointment_status: Database["public"]["Enums"]["appointment_status"]
+          category: string
+          client_id: string
+          client_name: string
+          client_package_id: string
+          commission_base_cents: number
+          commission_cents: number
+          commission_percent: number
+          description: string
+          discount_cents: number
+          due_date: string
+          entry_id: string
+          final_cents: number
+          kind: Database["public"]["Enums"]["entry_kind"]
+          method: Database["public"]["Enums"]["pay_method"]
+          open_cents: number
+          paid_at: string
+          paid_cents: number
+          payment_cents: number
+          payment_id: string
+          professional_id: string
+          professional_name: string
+          reversed_at: string
+          row_kind: string
+          service_name: string
+          status: string
+          studio_cents: number
+          sum_cents: number
+          total_count: number
+        }[]
+      }
+      rpc_finance_summary: {
+        Args: { p_from: string; p_professional_id?: string; p_to: string }
+        Returns: Json
+      }
       rpc_find_client_by_phone: {
         Args: { p_phone: string }
         Returns: {
@@ -1151,6 +1454,16 @@ export type Database = {
         Args: { p_appointment_id: string }
         Returns: undefined
       }
+      rpc_register_payments: {
+        Args: {
+          p_discount_cents?: number
+          p_entry_id: string
+          p_paid_at?: string
+          p_payments?: Json
+          p_request_id?: string
+        }
+        Returns: Json
+      }
       rpc_reschedule_appointment: {
         Args: {
           p_appointment_id: string
@@ -1158,6 +1471,10 @@ export type Database = {
           p_new_professional_id?: string
           p_new_starts_at: string
         }
+        Returns: undefined
+      }
+      rpc_reverse_payment: {
+        Args: { p_payment_id: string }
         Returns: undefined
       }
       rpc_search_clients: {
@@ -1186,6 +1503,14 @@ export type Database = {
       rpc_sell_package: {
         Args: { p_client_id: string; p_template_id: string }
         Returns: string
+      }
+      rpc_set_commission_rule: {
+        Args: {
+          p_category: Database["public"]["Enums"]["service_category"]
+          p_percent: number
+          p_professional_id: string
+        }
+        Returns: undefined
       }
       rpc_set_professional_services: {
         Args: { p_professional_id: string; p_service_ids: string[] }
@@ -1273,6 +1598,7 @@ export type Database = {
         }
         Returns: string
       }
+      rpc_void_entry: { Args: { p_entry_id: string }; Returns: undefined }
       rpc_void_package: {
         Args: { p_client_package_id: string }
         Returns: undefined
@@ -1291,6 +1617,8 @@ export type Database = {
         | "completed"
         | "cancelled"
         | "no_show"
+      entry_kind: "income" | "expense"
+      pay_method: "pix" | "cash" | "debit" | "credit" | "barter"
       service_action: "placement" | "maintenance" | "removal"
       service_category: "unhas" | "cilios" | "sobrancelhas" | "outros"
       service_kind: "standard" | "removal"
@@ -1433,6 +1761,8 @@ export const Constants = {
         "cancelled",
         "no_show",
       ],
+      entry_kind: ["income", "expense"],
+      pay_method: ["pix", "cash", "debit", "credit", "barter"],
       service_action: ["placement", "maintenance", "removal"],
       service_category: ["unhas", "cilios", "sobrancelhas", "outros"],
       service_kind: ["standard", "removal"],

@@ -1,13 +1,16 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
+import { useAuth } from '../../auth/AuthContext'
 import { Button, Chip, ChipRow, EmptyState, FieldLabel, Input, Pill, Sheet, Skeleton, Textarea, useSnackbar } from '../../components/ui'
 import { formatDayLong, formatTime, todaySP, toSaoPauloISO, ymdOf } from '../../lib/datetime'
 import { formatPhoneBR, toTitlePt } from '../../lib/format'
 import { invalidateAll, useAvailability, useSuggestedProfessionals, type AppointmentRow } from '../../lib/queries'
-import { messageOf, rpc } from '../../lib/rpc'
+import { messageOf, RpcError, rpc } from '../../lib/rpc'
+import { reversePaymentsOfEntry, useFinanceEntry } from '../../lib/financeQueries'
+import { PaymentPanel } from '../finance/PaymentSheet'
 import { PackagePill, serviceLine, StatusPill } from './common'
 
-export type SheetMode = 'view' | 'reschedule' | 'cancel' | 'complete'
+export type SheetMode = 'view' | 'reschedule' | 'cancel' | 'complete' | 'pay'
 
 const CANCEL_REASONS = ['Cliente cancelou', 'Reagendou', 'Outro']
 
@@ -37,6 +40,25 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
   const qc = useQueryClient()
   const snack = useSnackbar()
   const [pending, setPending] = useState(false)
+  const { isOwner } = useAuth()
+  // Owner only: the entry behind this appointment (amount, discount, paid). Professionals never query it.
+  const entry = useFinanceEntry({ appointmentId: a.id }, isOwner)
+  const [hasPayments, setHasPayments] = useState(false)
+
+  async function reversePayments() {
+    if (!entry.data) return
+    setPending(true)
+    try {
+      const n = await reversePaymentsOfEntry(entry.data.entry_id, a.client_id)
+      invalidateAll(qc)
+      setHasPayments(false)
+      snack.show(n === 1 ? 'Pagamento estornado' : 'Pagamentos estornados')
+    } catch (e) {
+      snack.show(messageOf(e), 'error')
+    } finally {
+      setPending(false)
+    }
+  }
 
   async function run(fn: () => Promise<unknown>, okMsg: string) {
     setPending(true)
@@ -46,6 +68,10 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
       snack.show(okMsg)
       onClose()
     } catch (e) {
+      if (isOwner && e instanceof RpcError && e.code === 'HAS_PAYMENTS') {
+        setHasPayments(true)
+        setMode('view')
+      }
       snack.show(messageOf(e), 'error')
     } finally {
       setPending(false)
@@ -60,8 +86,45 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
   if (mode === 'cancel') return <Cancel a={a} onBack={() => setMode('view')} run={run} pending={pending} />
 
   if (mode === 'complete') {
-    return <Complete a={a} day={day} onBack={() => setMode('view')} run={run} pending={pending} />
+    if (!isOwner) return <Complete a={a} day={day} onBack={() => setMode('view')} run={run} pending={pending} />
+    if (!entry.data) return <Skeleton className="h-40" />
+    return (
+      <PaymentPanel
+        target={{
+          mode: 'complete',
+          appointmentId: a.id,
+          day,
+          title: toTitlePt(a.client?.name),
+          detail: serviceLine(a, true),
+          grossCents: entry.data.amount_cents,
+          discountCents: entry.data.discount_cents,
+          paidCents: entry.data.paid_cents,
+        }}
+        onDone={onClose}
+        onCancel={() => setMode('view')}
+      />
+    )
   }
+
+  if (mode === 'pay' && entry.data) {
+    return (
+      <PaymentPanel
+        target={{
+          mode: 'pay',
+          entryId: entry.data.entry_id,
+          title: toTitlePt(a.client?.name),
+          detail: serviceLine(a, true),
+          grossCents: entry.data.amount_cents,
+          discountCents: entry.data.discount_cents,
+          paidCents: entry.data.paid_cents,
+        }}
+        onDone={onClose}
+        onCancel={() => setMode('view')}
+      />
+    )
+  }
+
+  const money = isOwner && a.status === 'completed' && entry.data && entry.data.final_cents > 0 ? entry.data : null
 
   return (
     <div className="space-y-5">
@@ -69,7 +132,23 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
         <StatusPill status={a.status} />
         <Pill color={a.professional?.color}>{toTitlePt(a.professional?.name)}</Pill>
         <PackagePill a={a} />
+        {money &&
+          (money.status === 'paid' ? (
+            <Pill tone="success">PAGO</Pill>
+          ) : (
+            <button type="button" onClick={() => setMode('pay')} aria-label="Receber" className="rounded-full">
+              <Pill tone={money.paid_cents > 0 ? 'warn' : 'gold'}>{money.paid_cents > 0 ? 'PARCIAL' : 'A RECEBER'}</Pill>
+            </button>
+          ))}
       </div>
+      {hasPayments && (
+        <div role="alert" className="space-y-3 rounded-[var(--radius-input)] border border-line px-4 py-3">
+          <p className="text-help !text-danger">Este agendamento tem pagamentos registrados. Estorne-os antes de continuar.</p>
+          <Button variant="secondary" loading={pending} onClick={() => void reversePayments()}>
+            Estornar pagamentos
+          </Button>
+        </div>
+      )}
       <dl className="space-y-4">
         <Info label="Telefone" value={formatPhoneBR(a.client?.phone_e164)} />
         <Info label="Serviço" value={serviceLine(a, true)} />

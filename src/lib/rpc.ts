@@ -1,6 +1,7 @@
 // Typed wrapper around every rpc_*. The UI and the agent call the same functions.
 // Rule violations come back as error.message = code, error.details = pt-BR text.
 import type { Database } from '../types/db'
+import type { FinanceEntry, FinanceSummary, PaymentResult } from './finance'
 import { supabase } from './supabase'
 
 export { supabase }
@@ -25,6 +26,10 @@ export const ERROR_MESSAGES = {
   INVALID_PHONE: 'Telefone inválido. Use DDD + número.',
   DUPLICATE_CLIENT: 'Já existe uma cliente com este nome e telefone.',
   INVALID_SETTING: 'Configuração inválida. Confira os valores e tente de novo.',
+  OVERPAYMENT: 'O valor recebido é maior que o saldo em aberto.',
+  BAD_DISCOUNT: 'Desconto inválido para este lançamento.',
+  BAD_AMOUNT: 'Valor inválido.',
+  HAS_PAYMENTS: 'Existem pagamentos registrados; estorne-os primeiro.',
 } as const
 
 export type ErrorCode = keyof typeof ERROR_MESSAGES
@@ -92,6 +97,18 @@ export const rpc = {
   completeAppointment: (a: Args<'rpc_complete_appointment'>) => call('rpc_complete_appointment', a),
   createBlock: (a: Args<'rpc_create_block'>) => call('rpc_create_block', a),
   deleteBlock: (a: Args<'rpc_delete_block'>) => call('rpc_delete_block', a),
+  // finance (owner only)
+  registerPayments: async (a: Args<'rpc_register_payments'>) => (await call('rpc_register_payments', a)) as unknown as PaymentResult,
+  completeAndPay: async (a: Args<'rpc_complete_and_pay'>) => (await call('rpc_complete_and_pay', a)) as unknown as PaymentResult,
+  reversePayment: (a: Args<'rpc_reverse_payment'>) => call('rpc_reverse_payment', a),
+  createManualEntry: (a: Args<'rpc_create_manual_entry'>) => call('rpc_create_manual_entry', a),
+  editEntry: (a: Args<'rpc_edit_entry'>) => call('rpc_edit_entry', a),
+  voidEntry: (a: Args<'rpc_void_entry'>) => call('rpc_void_entry', a),
+  setCommissionRule: (a: Args<'rpc_set_commission_rule'>) => call('rpc_set_commission_rule', a),
+  financeEntry: async (a: Args<'rpc_finance_entry'>) => (await call('rpc_finance_entry', a)) as unknown as FinanceEntry | null,
+  financeImportKeys: (a: Args<'rpc_finance_import_keys'>) => call('rpc_finance_import_keys', a),
+  financeSummary: async (a: Args<'rpc_finance_summary'>) => (await call('rpc_finance_summary', a)) as unknown as FinanceSummary,
+  financeList: (a: Args<'rpc_finance_list'>) => call('rpc_finance_list', a),
   // agent (owner only)
   agentOverview: () => call('rpc_agent_overview', undefined as never),
   agentSetSettings: (a: Args<'rpc_agent_set_settings'>) => call('rpc_agent_set_settings', a),

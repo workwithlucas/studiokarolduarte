@@ -1,0 +1,11 @@
+Cliente;Vencimento;Valor;Descrição
+ZZ Maria Aparecida Souza;15/10/2031;R$ 150,00;Alongamento pendente
+ZZ Ana Clara Souza;2031-10-20;80,50;Esmaltação
+ZZ Terezinha Alves;05/09/2031;1.200,00;Pacote antigo
+ZZ João Batista Lima;10/11/2031;45;
+ZZ Joana Ferreira;30/10/2031;R$ 99,90;Manutenção de cílios
+ZZ Carla Crédito;01/12/2031;300,00;Saldo do mês
+ZZ Cliente Inexistente;15/10/2031;50,00;Sem cadastro
+ZZ Luíza Conceição;31/02/2031;70,00;Data impossível
+ZZ Ângela Ávila;20/10/2031;abc;Valor inválido
+;20/10/2031;10,00;Sem nome

@@ -1,11 +1,13 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
+import { useAuth } from '../../auth/AuthContext'
 import { Button, FieldLabel, Input, MoneyInput, Select, Sheet, Toggle, useSnackbar } from '../../components/ui'
 import { toTitlePt } from '../../lib/format'
 import { formatBRL } from '../../lib/money'
 import { invalidateAll, useServices } from '../../lib/queries'
 import { usePackageTemplates, type PackageTemplate } from '../../lib/clientQueries'
 import { messageOf, rpc } from '../../lib/rpc'
+import { PaymentPanel, type PayTarget } from '../finance/PaymentSheet'
 import { ClientPicker, type PickedClient } from '../clients/ClientPicker'
 
 /** Vender pacote: client (search or prefilled) + active template → rpc_sell_package. */
@@ -25,6 +27,9 @@ function SellForm({ initial, onClose }: { initial: PickedClient | null; onClose:
   const [client, setClient] = useState<PickedClient | null>(initial)
   const [templateId, setTemplateId] = useState('')
   const [pending, setPending] = useState(false)
+  const { isOwner } = useAuth()
+  // Owner: after the sale, the Payment sheet opens on the sale entry. A professional's sale leaves it open.
+  const [payFor, setPayFor] = useState<PayTarget | null>(null)
 
   const active = (templates.data ?? []).filter((t) => t.active)
   const serviceName = (id: string) => toTitlePt(services.data?.find((s) => s.id === id)?.name)
@@ -33,16 +38,32 @@ function SellForm({ initial, onClose }: { initial: PickedClient | null; onClose:
     if (!client || !templateId) return
     setPending(true)
     try {
-      await rpc.sellPackage({ p_client_id: client.id, p_template_id: templateId })
+      const packageId = await rpc.sellPackage({ p_client_id: client.id, p_template_id: templateId })
       invalidateAll(qc)
       snack.show('Pacote vendido')
-      onClose()
+      const entry = isOwner ? await rpc.financeEntry({ p_appointment_id: null, p_client_package_id: packageId }) : null
+      if (!entry) {
+        onClose()
+        return
+      }
+      const tpl = active.find((t) => t.id === templateId)
+      setPayFor({
+        mode: 'pay',
+        entryId: entry.entry_id,
+        title: toTitlePt(client.name),
+        detail: tpl ? `${tpl.name} · ${tpl.sessions_total}x` : entry.description,
+        grossCents: entry.amount_cents,
+        discountCents: entry.discount_cents,
+        paidCents: entry.paid_cents,
+      })
     } catch (e) {
       snack.show(messageOf(e), 'error')
     } finally {
       setPending(false)
     }
   }
+
+  if (payFor) return <PaymentPanel target={payFor} onDone={onClose} />
 
   return (
     <div className="space-y-5">

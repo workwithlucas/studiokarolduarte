@@ -4,6 +4,7 @@ import { ymdOf, addDaysYMD, todaySP } from '../src/lib/datetime'
 import { readFileSync } from 'node:fs'
 import { decodeCsv, parseCsv, planImport, runImport } from '../src/lib/import/clients'
 import { fetchAppointmentKeys, fetchExistingClients, fetchImportContext } from '../src/lib/import/existing'
+import { planReceivables, runReceivableImport } from '../src/lib/import/receivables'
 import { parseAppointmentFile, planAppointments, runAppointmentImport } from '../src/lib/import/appointments'
 import { rpc, RpcError, supabase, type ErrorCode } from '../src/lib/rpc'
 
@@ -238,6 +239,278 @@ async function appointmentImportFlow(maraId: string) {
   }
 }
 
+/** Finance: complete_and_pay with discount + split, statement, reverse, expense, receivables import (twice), Mara FORBIDDEN. */
+async function financeFlow(maraId: string) {
+  const today = todaySP()
+  const horizon = addDaysYMD(today, 90)
+
+  // ---- fixtures: a service Mara performs, a client
+  const { data: svcRows } = await supabase.from('services').select('id').eq('name', 'ZZ Financeiro Fluxo')
+  const svcId = await rpc.upsertService({
+    p_id: svcRows?.[0]?.id ?? null,
+    p_name: 'ZZ Financeiro Fluxo',
+    p_category: 'unhas',
+    p_kind: 'standard',
+    p_duration_min: 30,
+    p_price_cents: 5000,
+    p_maintenance_duration_min: null,
+    p_maintenance_price_cents: null,
+    p_cash_price_cents: null,
+    p_active: true,
+  })
+  const { data: links } = await supabase.from('professional_services').select('service_id').eq('professional_id', maraId)
+  await rpc.setProfessionalServices({
+    p_professional_id: maraId,
+    p_service_ids: [...new Set([...(links ?? []).map((l) => l.service_id), svcId])],
+  })
+  const clientId = await rpc.upsertClient({ p_name: 'ZZ Cliente Financeiro', p_phone: '11 95555-0009', p_external_code: null, p_birthday: null, p_notes: null })
+
+  // ---- book (last free slot so other flows never collide), complete_and_pay with discount and split
+  const avail = await rpc.getAvailability({
+    p_professional_id: maraId,
+    p_service_id: svcId,
+    p_action: 'placement',
+    p_addon_ids: [],
+    p_from: addDaysYMD(today, 3),
+    p_to: addDaysYMD(today, 30),
+    p_source: 'staff',
+  })
+  const slot = avail.at(-1)
+  if (!slot) throw new Error('no free slot for the finance flow')
+  const apptId = await rpc.bookAppointment({
+    p_client_id: clientId,
+    p_professional_id: maraId,
+    p_service_id: svcId,
+    p_action: 'placement',
+    p_addon_ids: [],
+    p_starts_at: slot.starts_at,
+    p_source: 'staff',
+    p_idempotency_key: crypto.randomUUID(),
+    p_notes: null,
+    p_client_package_id: null,
+  })
+  const before = await rpc.financeEntry({ p_appointment_id: apptId, p_client_package_id: null })
+  check('finance: entry before completion is open', before?.amount_cents === 5000 && before.open_cents === 5000 && before.status !== 'paid')
+
+  const requestId = crypto.randomUUID()
+  const lines = [
+    { amount_cents: 1500, method: 'pix' },
+    { amount_cents: 2500, method: 'cash' },
+  ]
+  const paid = await rpc.completeAndPay({
+    p_appointment_id: apptId,
+    p_actual_end: null,
+    p_discount_cents: 1000,
+    p_payments: lines,
+    p_request_id: requestId,
+  })
+  check('finance: complete_and_pay -> paid, final 40', paid.status === 'paid' && paid.final_cents === 4000 && paid.open_cents === 0, JSON.stringify(paid))
+  check('finance: appointment completed', (await statusOf(apptId)) === 'completed')
+  const again = await rpc.completeAndPay({
+    p_appointment_id: apptId,
+    p_actual_end: null,
+    p_discount_cents: 1000,
+    p_payments: lines,
+    p_request_id: requestId,
+  })
+  check('finance: same request_id replays without duplicating', again.payment_ids.length === 2 && again.paid_cents === 4000, JSON.stringify(again))
+  const { data: comm } = await supabase
+    .from('ledger_entries')
+    .select('commission_base_cents,commission_cents,studio_cents')
+    .eq('id', paid.entry_id)
+    .maybeSingle()
+  check('finance: Mara 50% of the discounted value', comm?.commission_base_cents === 4000 && comm.commission_cents === 2000 && comm.studio_cents === 2000, JSON.stringify(comm))
+
+  const statement = () =>
+    rpc.financeList({
+      p_mode: 'statement',
+      p_from: today,
+      p_to: today,
+      p_status: null,
+      p_professional_id: null,
+      p_client_id: clientId,
+      p_query: null,
+      p_include_reversed: false,
+      p_limit: 50,
+      p_offset: 0,
+    })
+  const stmt = await statement()
+  check('finance: both payments in the Extrato', stmt.filter((r) => r.entry_id === paid.entry_id).length === 2, String(stmt.length))
+  const summary = await rpc.financeSummary({ p_from: today, p_to: today, p_professional_id: null })
+  check('finance: summary received >= 40', summary.cards.received_cents >= 4000)
+
+  // ---- reverse -> back to A receber
+  for (const r of stmt.filter((x) => x.entry_id === paid.entry_id)) await rpc.reversePayment({ p_payment_id: r.payment_id })
+  const receivable = () =>
+    rpc.financeList({
+      p_mode: 'receivable',
+      p_from: today,
+      p_to: horizon,
+      p_status: null,
+      p_professional_id: maraId,
+      p_client_id: clientId,
+      p_query: null,
+      p_include_reversed: false,
+      p_limit: 50,
+      p_offset: 0,
+    })
+  const back = (await receivable()).find((r) => r.entry_id === paid.entry_id)
+  check('finance: reversed -> open again in A receber', back?.open_cents === 4000, JSON.stringify(back?.open_cents))
+  check('finance: reversed payments leave the Extrato', (await statement()).filter((r) => r.entry_id === paid.entry_id).length === 0)
+  await expectCode('finance: overpayment -> OVERPAYMENT', 'OVERPAYMENT', () =>
+    rpc.registerPayments({
+      p_entry_id: paid.entry_id,
+      p_discount_cents: null,
+      p_payments: [{ amount_cents: 4001, method: 'pix' }],
+      p_request_id: crypto.randomUUID(),
+      p_paid_at: null,
+    }),
+  )
+  await rpc.registerPayments({
+    p_entry_id: paid.entry_id,
+    p_discount_cents: null,
+    p_payments: [{ amount_cents: 4000, method: 'pix' }],
+    p_request_id: crypto.randomUUID(),
+    p_paid_at: null,
+  })
+  check('finance: paid again', (await rpc.financeEntry({ p_appointment_id: apptId, p_client_package_id: null }))?.status === 'paid')
+
+  // ---- expense: create, pay
+  const expenseId = await rpc.createManualEntry({
+    p_kind: 'expense',
+    p_description: 'ZZ Despesa Fluxo',
+    p_category: 'Materiais',
+    p_amount_cents: 12345,
+    p_due_date: today,
+    p_client_id: null,
+    p_professional_id: null,
+    p_pay_now: false,
+    p_method: null,
+    p_import_key: null,
+  })
+  const payable = () =>
+    rpc.financeList({
+      p_mode: 'payable',
+      p_from: today,
+      p_to: today,
+      p_status: null,
+      p_professional_id: null,
+      p_client_id: null,
+      p_query: 'ZZ Despesa Fluxo',
+      p_include_reversed: false,
+      p_limit: 50,
+      p_offset: 0,
+    })
+  check('finance: expense is in A pagar, open', (await payable()).find((r) => r.entry_id === expenseId)?.status !== 'paid')
+  await rpc.registerPayments({
+    p_entry_id: expenseId,
+    p_discount_cents: null,
+    p_payments: [{ amount_cents: 12345, method: 'pix' }],
+    p_request_id: crypto.randomUUID(),
+    p_paid_at: null,
+  })
+  check('finance: expense paid', (await payable()).find((r) => r.entry_id === expenseId)?.status === 'paid')
+
+  // ---- receivables import, twice (a fresh year per run keeps re-runs independent)
+  const year = 2100 - Math.floor(Math.random() * 50)
+  const csv = readFileSync('tests/fixtures/receivables-sample.csv', 'utf-8').replaceAll('2031', String(year))
+  const importOnce = async () => {
+    const clients = await fetchExistingClients()
+    const plan = await planReceivables(parseCsv(csv), clients)
+    const existing = new Set(await rpc.financeImportKeys({ p_keys: plan.rows.map((r) => r.key) }))
+    return { plan, result: await runReceivableImport(plan, (a) => rpc.createManualEntry(a), existing) }
+  }
+  const imp1 = await importOnce()
+  check(
+    'receivables import: 6 created, 4 skipped, no errors',
+    imp1.result.created === 6 && imp1.result.skipped.length === 4 && imp1.result.errors.length === 0,
+    JSON.stringify({ c: imp1.result.created, s: imp1.result.skipped.map((s) => s.reason), e: imp1.result.errors }),
+  )
+  const imp2 = await importOnce()
+  check(
+    'receivables import twice: second creates 0',
+    imp2.result.created === 0 && imp2.result.alreadyThere === 6 && imp2.result.errors.length === 0,
+    JSON.stringify(imp2.result),
+  )
+  const { data: keyed } = await supabase.from('ledger_entries').select('id').in('import_key', imp1.plan.rows.map((r) => r.key))
+  check('receivables import: exactly 6 entries in the ledger', keyed?.length === 6, String(keyed?.length))
+
+  // ---- Mara: everything financial is FORBIDDEN
+  await login('mara@studio.test')
+  const nil = '00000000-0000-0000-0000-000000000000'
+  await expectCode('mara: finance_summary -> FORBIDDEN', 'FORBIDDEN', () => rpc.financeSummary({ p_from: today, p_to: today, p_professional_id: null }))
+  await expectCode('mara: finance_list -> FORBIDDEN', 'FORBIDDEN', () =>
+    rpc.financeList({
+      p_mode: 'receivable',
+      p_from: today,
+      p_to: today,
+      p_status: null,
+      p_professional_id: null,
+      p_client_id: null,
+      p_query: null,
+      p_include_reversed: false,
+      p_limit: 5,
+      p_offset: 0,
+    }),
+  )
+  await expectCode('mara: finance_entry -> FORBIDDEN', 'FORBIDDEN', () => rpc.financeEntry({ p_appointment_id: apptId, p_client_package_id: null }))
+  await expectCode('mara: register_payments -> FORBIDDEN', 'FORBIDDEN', () =>
+    rpc.registerPayments({
+      p_entry_id: paid.entry_id,
+      p_discount_cents: null,
+      p_payments: [{ amount_cents: 1, method: 'pix' }],
+      p_request_id: crypto.randomUUID(),
+      p_paid_at: null,
+    }),
+  )
+  await expectCode('mara: complete_and_pay -> FORBIDDEN', 'FORBIDDEN', () =>
+    rpc.completeAndPay({ p_appointment_id: apptId, p_actual_end: null, p_discount_cents: null, p_payments: [], p_request_id: crypto.randomUUID() }),
+  )
+  await expectCode('mara: reverse_payment -> FORBIDDEN', 'FORBIDDEN', () => rpc.reversePayment({ p_payment_id: nil }))
+  await expectCode('mara: create_manual_entry -> FORBIDDEN', 'FORBIDDEN', () =>
+    rpc.createManualEntry({
+      p_kind: 'expense',
+      p_description: 'x',
+      p_category: null,
+      p_amount_cents: 100,
+      p_due_date: today,
+      p_client_id: null,
+      p_professional_id: null,
+      p_pay_now: false,
+      p_method: null,
+      p_import_key: null,
+    }),
+  )
+  await expectCode('mara: edit_entry -> FORBIDDEN', 'FORBIDDEN', () =>
+    rpc.editEntry({ p_entry_id: expenseId, p_description: 'x', p_category: null, p_due_date: today, p_amount_cents: null }),
+  )
+  await expectCode('mara: void_entry -> FORBIDDEN', 'FORBIDDEN', () => rpc.voidEntry({ p_entry_id: expenseId }))
+  await expectCode('mara: set_commission_rule -> FORBIDDEN', 'FORBIDDEN', () =>
+    rpc.setCommissionRule({ p_professional_id: maraId, p_category: null, p_percent: 99 }),
+  )
+  const ledger = await supabase.from('ledger_entries').select('id').limit(1)
+  const vled = await supabase.from('v_ledger').select('id').limit(1)
+  const pays = await supabase.from('ledger_payments').select('id').limit(1)
+  check('mara: no rows from ledger_entries, v_ledger, ledger_payments', (ledger.data ?? []).length === 0 && (vled.data ?? []).length === 0 && (pays.data ?? []).length === 0)
+
+  // ---- cleanup (owner): void the imported rows so the local ledger stays tidy
+  await login('karol@studio.test')
+  for (const e of keyed ?? []) await rpc.voidEntry({ p_entry_id: e.id })
+  const income = await rpc.financeList({
+    p_mode: 'statement',
+    p_from: today,
+    p_to: today,
+    p_status: null,
+    p_professional_id: null,
+    p_client_id: null,
+    p_query: 'ZZ Despesa Fluxo',
+    p_include_reversed: false,
+    p_limit: 5,
+    p_offset: 0,
+  })
+  check('finance: expenses never appear in the income Extrato', income.length === 0)
+}
+
 async function main() {
   await login('karol@studio.test')
 
@@ -378,6 +651,8 @@ async function main() {
   await crmFlow(mara.id)
   await login('karol@studio.test')
   await appointmentImportFlow(mara.id)
+  await login('karol@studio.test')
+  await financeFlow(mara.id)
 
   // ---- cleanup + invariants
   await login('karol@studio.test')

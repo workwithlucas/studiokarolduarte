@@ -37,3 +37,22 @@ insert into studio_settings (key, value) values
   ('retention_days', '14'),
   ('debounce_seconds', '8')
 on conflict (key) do nothing;
+
+-- Commission rules (the professional's share). Milena has no rule for "outros" on purpose.
+-- Existing rules are kept; change percentages in the app (Equipe > Comissão).
+insert into commission_rules (professional_id, category, percent)
+select p.id, v.cat::service_category, v.pct
+from (values
+  ('Karol Duarte', null, 58),
+  ('Mara', null, 50),
+  ('Milena', 'unhas', 65),
+  ('Milena', 'cilios', 70),
+  ('Milena', 'sobrancelhas', 70)
+) as v (name, cat, pct)
+join professionals p on p.name = v.name
+on conflict (professional_id, (_cat_key(category))) do nothing;
+
+-- Fill the commission of appointments completed before the rules existed.
+select _recompute_commission(l.id)
+from ledger_entries l
+where l.kind = 'income' and l.appointment_id is not null and l.voided_at is null and l.commission_cents is null;

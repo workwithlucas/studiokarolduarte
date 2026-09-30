@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
 import { useState } from 'react'
 import { Button, EmptyState, Kicker, Pill, Skeleton, Toggle, useSnackbar } from '../components/ui'
+import { CommissionSheet } from '../features/team/CommissionSheet'
 import { ProfessionalFormSheet, ProfessionalServicesSheet, WorkingHoursSheet } from '../features/team/TeamSheets'
 import { safeColor, toTitlePt } from '../lib/format'
 import { invalidateCatalog, useProfessionals, useProfessionalServices, type Professional } from '../lib/queries'
@@ -15,6 +16,7 @@ export function TeamPage() {
   const [form, setForm] = useState<Professional | 'new' | null>(null)
   const [servicesFor, setServicesFor] = useState<Professional | null>(null)
   const [hoursFor, setHoursFor] = useState<Professional | null>(null)
+  const [commissionFor, setCommissionFor] = useState<Professional | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
   async function setActive(p: Professional, active: boolean) {
@@ -82,6 +84,9 @@ export function TeamPage() {
                   <Button variant="secondary" onClick={() => setHoursFor(p)}>
                     Horários
                   </Button>
+                  <Button variant="secondary" onClick={() => setCommissionFor(p)}>
+                    Comissão
+                  </Button>
                   <Button variant="secondary" onClick={() => setForm(p)}>
                     Editar
                   </Button>
@@ -95,6 +100,7 @@ export function TeamPage() {
       <ProfessionalFormSheet open={form !== null} pro={form === 'new' ? null : form} onClose={() => setForm(null)} />
       <ProfessionalServicesSheet pro={servicesFor} onClose={() => setServicesFor(null)} />
       <WorkingHoursSheet pro={hoursFor} onClose={() => setHoursFor(null)} />
+      <CommissionSheet pro={commissionFor} onClose={() => setCommissionFor(null)} />
     </div>
   )
 }
