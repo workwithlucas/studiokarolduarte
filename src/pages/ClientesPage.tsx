@@ -8,6 +8,7 @@ import { Avatar, dayMonth, SegmentPill, useDebounced, WhatsAppButton } from '../
 import { ImportSheet } from '../features/clients/ImportSheet'
 import { NewClientSheet } from '../features/clients/ClientSheets'
 import { useClientDirectory, useClientSpend, type ClientDirRow } from '../lib/clientQueries'
+import { useClientAccountSummary } from '../lib/financeQueries'
 import { todaySP } from '../lib/datetime'
 import { formatPhoneBR, toTitlePt } from '../lib/format'
 import { formatBRL } from '../lib/money'
@@ -36,6 +37,11 @@ export function ClientesPage() {
   const rows = (dir.data?.pages ?? []).flat()
   const total = dir.data?.pages[0]?.[0]?.total_count ?? 0
   const spend = useClientSpend(
+    rows.map((r) => r.client_id),
+    isOwner && tab === 'diretorio',
+  )
+
+  const accounts = useClientAccountSummary(
     rows.map((r) => r.client_id),
     isOwner && tab === 'diretorio',
   )
@@ -96,6 +102,7 @@ export function ClientesPage() {
               c={c}
               returning={tab === 'retornar'}
               spentCents={spend.data?.get(c.client_id)}
+              account={accounts.data?.get(c.client_id)}
               showSpend={isOwner && tab === 'diretorio'}
               onBook={() => setBooking({ date: todaySP(), client: { id: c.client_id, name: c.name, phone: c.phone_e164 } })}
             />
@@ -123,12 +130,14 @@ function ClientRow({
   returning,
   showSpend,
   spentCents,
+  account,
   onBook,
 }: {
   c: ClientDirRow
   returning: boolean
   showSpend: boolean
   spentCents: number | undefined
+  account: { balance: number; debt: number } | undefined
   onBook: () => void
 }) {
   return (
@@ -146,6 +155,8 @@ function ClientRow({
             </Pill>
             {returning && c.days_since_last_visit !== null && <Pill tone="warn">há {c.days_since_last_visit} dias</Pill>}
             {showSpend && spentCents !== undefined && <Pill tone="primary">{formatBRL(spentCents)}</Pill>}
+            {showSpend && account && account.balance > 0 && <Pill tone="success">Crédito {formatBRL(account.balance)}</Pill>}
+            {showSpend && account && account.debt > 0 && <Pill tone="danger">Em aberto {formatBRL(account.debt)}</Pill>}
           </div>
         </div>
       </Link>

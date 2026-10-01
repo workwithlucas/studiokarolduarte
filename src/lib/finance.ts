@@ -5,7 +5,7 @@ import { addDaysYMD, formatDate, isValidYMD, ymdOf } from './datetime'
 import { centsToPlain } from './money'
 
 // ---------------------------------------------------------------- payment methods
-export type PayMethod = 'pix' | 'cash' | 'debit' | 'credit' | 'barter'
+export type PayMethod = 'pix' | 'cash' | 'debit' | 'credit' | 'barter' | 'credit_balance' | 'adjustment'
 export const PAY_METHODS: Array<{ value: PayMethod; label: string }> = [
   { value: 'pix', label: 'Pix' },
   { value: 'cash', label: 'Dinheiro' },
@@ -13,8 +13,20 @@ export const PAY_METHODS: Array<{ value: PayMethod; label: string }> = [
   { value: 'credit', label: 'Crédito' },
   { value: 'barter', label: 'Permuta' },
 ]
+/** Not cash: the client credit used to pay, and the opening balance ("Saldo anterior"). */
+export const NONCASH_METHODS: Array<{ value: PayMethod; label: string }> = [
+  { value: 'credit_balance', label: 'Crédito da cliente' },
+  { value: 'adjustment', label: 'Saldo anterior' },
+]
+export const CREDIT_METHOD = NONCASH_METHODS[0]!
+export const ALL_METHODS = [...PAY_METHODS, ...NONCASH_METHODS]
 export function methodLabel(m: string | null | undefined): string {
-  return PAY_METHODS.find((x) => x.value === m)?.label ?? '—'
+  return ALL_METHODS.find((x) => x.value === m)?.label ?? '—'
+}
+/** Methods of a deposit in Adicionar crédito. */
+export const DEPOSIT_METHODS = PAY_METHODS.filter((m) => ['pix', 'cash', 'debit', 'credit'].includes(m.value))
+export function isNonCash(m: string | null | undefined): boolean {
+  return m === 'credit_balance' || m === 'adjustment'
 }
 
 // ---------------------------------------------------------------- payment sheet math
@@ -50,6 +62,53 @@ export function paymentMath(grossCents: number, discountCents: number | null, li
   const discountOk = raw >= 0 && raw <= grossCents && final >= alreadyPaidCents
   const linesOk = lines.every((l) => l.cents === null || l.cents > 0)
   return { discount, final, total, entered, remaining, discountOk, linesOk, canReceive: discountOk && linesOk && entered > 0 && remaining >= 0 }
+}
+
+// ---------------------------------------------------------------- client credit (payment sheet)
+/** A credit line can take at most the balance and at most what is still to receive. */
+export function creditLimit(balanceCents: number, remainingCents: number): number {
+  return Math.max(0, Math.min(balanceCents, remainingCents))
+}
+
+/** Limit for line `index`: the balance not used by the other credit lines, and what the other lines leave to receive. */
+export function creditLineLimit(lines: PayLine[], index: number, balanceCents: number, totalCents: number): number {
+  let credit = 0
+  let entered = 0
+  lines.forEach((l, i) => {
+    if (i === index) return
+    entered += l.cents ?? 0
+    if (l.method === 'credit_balance') credit += l.cents ?? 0
+  })
+  return creditLimit(balanceCents - credit, totalCents - entered)
+}
+
+/** True when the credit lines together ask for more than the balance. */
+export function creditExceeded(lines: PayLine[], balanceCents: number): boolean {
+  return lines.reduce((n, l) => n + (l.method === 'credit_balance' ? (l.cents ?? 0) : 0), 0) > balanceCents
+}
+
+// ---------------------------------------------------------------- settlement preview (oldest first)
+export interface OpenEntry {
+  entry_id: string
+  due_date: string
+  description: string
+  open_cents: number
+}
+export interface AllocationRow extends OpenEntry {
+  applied_cents: number
+  left_cents: number
+}
+/** Mirrors rpc_settle_client_account: the total goes across the entries in the given (oldest first) order. */
+export function allocationPreview(entries: OpenEntry[], totalCents: number, totalDebtCents?: number) {
+  let left = Math.max(0, totalCents)
+  const rows: AllocationRow[] = entries.map((e) => {
+    const applied = Math.min(e.open_cents, left)
+    left -= applied
+    return { ...e, applied_cents: applied, left_cents: e.open_cents - applied }
+  })
+  const debt = totalDebtCents ?? entries.reduce((n, e) => n + e.open_cents, 0)
+  const applied = rows.reduce((n, r) => n + r.applied_cents, 0)
+  return { rows, applied, remainingDebt: Math.max(0, debt - Math.max(0, totalCents)), overpay: totalCents > debt }
 }
 
 /** Payload for rpc_register_payments / rpc_complete_and_pay: empty lines are dropped. */
@@ -177,7 +236,9 @@ export function totalsByMethod(rows: Array<Pick<StatementRow, 'method' | 'paymen
     map.set(r.method, (map.get(r.method) ?? 0) + (r.payment_cents ?? 0))
   }
   const list = PAY_METHODS.filter((m) => map.has(m.value)).map((m) => ({ method: m.value, label: m.label, cents: map.get(m.value)! }))
-  return { list, total: list.reduce((n, x) => n + x.cents, 0) }
+  // Non-cash lines never enter the total.
+  const noncash = NONCASH_METHODS.filter((m) => map.has(m.value)).map((m) => ({ method: m.value, label: m.label, cents: map.get(m.value)! }))
+  return { list, total: list.reduce((n, x) => n + x.cents, 0), noncash }
 }
 
 // ---------------------------------------------------------------- RPC result shapes (jsonb)
@@ -186,6 +247,13 @@ export interface FinanceSummary {
   by_professional: Array<{ professional_id: string; name: string; count: number; production_cents: number; commission_cents: number; studio_cents: number }>
   by_method: Array<{ method: string; cents: number; count: number }>
   barter_cents: number
+  /** credit_balance and adjustment: never part of received_cents. */
+  noncash_by_method: Array<{ method: string; cents: number; count: number }>
+  accounts: {
+    credit_total_cents: number
+    open_debt_total_cents: number
+    top: Array<{ client_id: string; client: string; balance_cents: number; debt_cents: number }>
+  }
   packages: { sold_count: number; sold_cents: number; sessions_used: number }
   expenses_by_category: Array<{ category: string; cents: number }>
   warnings: { missing_commission_rules: number }
@@ -200,6 +268,20 @@ export interface PaymentResult {
   open_cents: number
   status: string
   payment_ids: string[]
+}
+
+export interface SettleAllocation {
+  entry_id: string
+  amount_cents: number
+  method: PayMethod
+}
+
+export interface ClientAccount {
+  credit_balance_cents: number
+  open_debt_cents: number
+  open_entries_count: number
+  open_entries: OpenEntry[]
+  movements: Array<{ date: string; type: 'deposit' | 'use' | 'settlement' | 'opening'; method: PayMethod; amount_cents: number; note: string | null }>
 }
 
 export interface FinanceEntry {

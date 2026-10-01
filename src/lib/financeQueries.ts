@@ -63,6 +63,27 @@ export function useFinanceEntry(target: { appointmentId?: string | null; package
   })
 }
 
+/** Owner only: credit balance, open debt, open entries and the last movements of one client. */
+export function useClientAccount(clientId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ['client-account', clientId],
+    enabled: enabled && !!clientId,
+    queryFn: () => rpc.getClientAccount({ p_client_id: clientId! }),
+  })
+}
+
+/** Owner only: balance and debt for a set of ids (one call). */
+export function useClientAccountSummary(ids: string[], enabled = true) {
+  return useQuery({
+    queryKey: ['client-account-summary', [...ids].sort().join(',')],
+    enabled: enabled && ids.length > 0,
+    queryFn: async () => {
+      const rows = await rpc.clientAccountSummary({ p_client_ids: ids })
+      return new Map(rows.map((r) => [r.client_id, { balance: Number(r.credit_balance_cents), debt: Number(r.open_debt_cents) }]))
+    },
+  })
+}
+
 export function useCommissionRules(enabled = true) {
   return useQuery({
     queryKey: ['commission-rules'],

@@ -34,6 +34,60 @@ export type Database = {
   }
   public: {
     Tables: {
+      account_settlements: {
+        Row: {
+          client_id: string
+          created_at: string
+          request_id: string
+        }
+        Insert: {
+          client_id: string
+          created_at?: string
+          request_id: string
+        }
+        Update: {
+          client_id?: string
+          created_at?: string
+          request_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "account_settlements_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "_v_client_credit"
+            referencedColumns: ["client_id"]
+          },
+          {
+            foreignKeyName: "account_settlements_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "account_settlements_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_account"
+            referencedColumns: ["client_id"]
+          },
+          {
+            foreignKeyName: "account_settlements_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_directory"
+            referencedColumns: ["client_id"]
+          },
+          {
+            foreignKeyName: "account_settlements_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_stats"
+            referencedColumns: ["client_id"]
+          },
+        ]
+      }
       appointment_addons: {
         Row: {
           addon_id: string
@@ -142,8 +196,22 @@ export type Database = {
             foreignKeyName: "appointments_client_id_fkey"
             columns: ["client_id"]
             isOneToOne: false
+            referencedRelation: "_v_client_credit"
+            referencedColumns: ["client_id"]
+          },
+          {
+            foreignKeyName: "appointments_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
             referencedRelation: "clients"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "appointments_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_account"
+            referencedColumns: ["client_id"]
           },
           {
             foreignKeyName: "appointments_client_id_fkey"
@@ -252,8 +320,22 @@ export type Database = {
             foreignKeyName: "client_packages_client_id_fkey"
             columns: ["client_id"]
             isOneToOne: false
+            referencedRelation: "_v_client_credit"
+            referencedColumns: ["client_id"]
+          },
+          {
+            foreignKeyName: "client_packages_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
             referencedRelation: "clients"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "client_packages_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_account"
+            referencedColumns: ["client_id"]
           },
           {
             foreignKeyName: "client_packages_client_id_fkey"
@@ -354,6 +436,7 @@ export type Database = {
           description: string
           discount_cents: number
           due_date: string
+          entry_type: string
           final_cents: number | null
           id: string
           import_key: string | null
@@ -376,6 +459,7 @@ export type Database = {
           description: string
           discount_cents?: number
           due_date: string
+          entry_type?: string
           final_cents?: number | null
           id?: string
           import_key?: string | null
@@ -398,6 +482,7 @@ export type Database = {
           description?: string
           discount_cents?: number
           due_date?: string
+          entry_type?: string
           final_cents?: number | null
           id?: string
           import_key?: string | null
@@ -419,8 +504,22 @@ export type Database = {
             foreignKeyName: "ledger_entries_client_id_fkey"
             columns: ["client_id"]
             isOneToOne: false
+            referencedRelation: "_v_client_credit"
+            referencedColumns: ["client_id"]
+          },
+          {
+            foreignKeyName: "ledger_entries_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
             referencedRelation: "clients"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ledger_entries_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_account"
+            referencedColumns: ["client_id"]
           },
           {
             foreignKeyName: "ledger_entries_client_id_fkey"
@@ -466,9 +565,11 @@ export type Database = {
           entry_id: string
           id: string
           method: Database["public"]["Enums"]["pay_method"]
+          note: string | null
           paid_at: string
           request_id: string | null
           reversed_at: string | null
+          settlement_id: string | null
         }
         Insert: {
           amount_cents: number
@@ -476,9 +577,11 @@ export type Database = {
           entry_id: string
           id?: string
           method: Database["public"]["Enums"]["pay_method"]
+          note?: string | null
           paid_at?: string
           request_id?: string | null
           reversed_at?: string | null
+          settlement_id?: string | null
         }
         Update: {
           amount_cents?: number
@@ -486,9 +589,11 @@ export type Database = {
           entry_id?: string
           id?: string
           method?: Database["public"]["Enums"]["pay_method"]
+          note?: string | null
           paid_at?: string
           request_id?: string | null
           reversed_at?: string | null
+          settlement_id?: string | null
         }
         Relationships: [
           {
@@ -504,6 +609,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "v_ledger"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ledger_payments_settlement_id_fkey"
+            columns: ["settlement_id"]
+            isOneToOne: false
+            referencedRelation: "account_settlements"
+            referencedColumns: ["request_id"]
           },
         ]
       }
@@ -815,8 +927,22 @@ export type Database = {
             foreignKeyName: "wa_conversations_client_id_fkey"
             columns: ["client_id"]
             isOneToOne: false
+            referencedRelation: "_v_client_credit"
+            referencedColumns: ["client_id"]
+          },
+          {
+            foreignKeyName: "wa_conversations_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
             referencedRelation: "clients"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wa_conversations_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_account"
+            referencedColumns: ["client_id"]
           },
           {
             foreignKeyName: "wa_conversations_client_id_fkey"
@@ -909,6 +1035,27 @@ export type Database = {
       }
     }
     Views: {
+      _v_client_credit: {
+        Row: {
+          client_id: string | null
+          credit_balance_cents: number | null
+          credit_deposited_cents: number | null
+          credit_used_cents: number | null
+        }
+        Relationships: []
+      }
+      v_client_account: {
+        Row: {
+          client_id: string | null
+          credit_balance_cents: number | null
+          credit_deposited_cents: number | null
+          credit_used_cents: number | null
+          oldest_open_due: string | null
+          open_debt_cents: number | null
+          open_entries_count: number | null
+        }
+        Relationships: []
+      }
       v_client_directory: {
         Row: {
           archived: boolean | null
@@ -951,8 +1098,22 @@ export type Database = {
             foreignKeyName: "client_packages_client_id_fkey"
             columns: ["client_id"]
             isOneToOne: false
+            referencedRelation: "_v_client_credit"
+            referencedColumns: ["client_id"]
+          },
+          {
+            foreignKeyName: "client_packages_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
             referencedRelation: "clients"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "client_packages_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_account"
+            referencedColumns: ["client_id"]
           },
           {
             foreignKeyName: "client_packages_client_id_fkey"
@@ -1015,10 +1176,12 @@ export type Database = {
           description: string | null
           discount_cents: number | null
           due_date: string | null
+          entry_type: string | null
           final_cents: number | null
           id: string | null
           import_key: string | null
           kind: Database["public"]["Enums"]["entry_kind"] | null
+          noncash_paid_cents: number | null
           note: string | null
           open_cents: number | null
           paid_cents: number | null
@@ -1039,8 +1202,22 @@ export type Database = {
             foreignKeyName: "ledger_entries_client_id_fkey"
             columns: ["client_id"]
             isOneToOne: false
+            referencedRelation: "_v_client_credit"
+            referencedColumns: ["client_id"]
+          },
+          {
+            foreignKeyName: "ledger_entries_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
             referencedRelation: "clients"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ledger_entries_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_account"
+            referencedColumns: ["client_id"]
           },
           {
             foreignKeyName: "ledger_entries_client_id_fkey"
@@ -1091,8 +1268,22 @@ export type Database = {
             foreignKeyName: "appointments_client_id_fkey"
             columns: ["client_id"]
             isOneToOne: false
+            referencedRelation: "_v_client_credit"
+            referencedColumns: ["client_id"]
+          },
+          {
+            foreignKeyName: "appointments_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
             referencedRelation: "clients"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "appointments_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_account"
+            referencedColumns: ["client_id"]
           },
           {
             foreignKeyName: "appointments_client_id_fkey"
@@ -1128,6 +1319,7 @@ export type Database = {
         Args: { c: Database["public"]["Enums"]["service_category"] }
         Returns: string
       }
+      _client_credit_balance: { Args: { p_client_id: string }; Returns: number }
       _cron_call: { Args: { p_function: string }; Returns: undefined }
       _cron_send_confirmations: { Args: never; Returns: undefined }
       _cron_wa_sweep: { Args: never; Returns: undefined }
@@ -1258,6 +1450,18 @@ export type Database = {
       is_owner: { Args: never; Returns: boolean }
       is_staff: { Args: never; Returns: boolean }
       normalize_phone: { Args: { p: string }; Returns: string }
+      rpc_add_client_credit: {
+        Args: {
+          p_amount_cents: number
+          p_client_id: string
+          p_method?: Database["public"]["Enums"]["pay_method"]
+          p_note?: string
+          p_opening?: boolean
+          p_paid_at?: string
+          p_request_id?: string
+        }
+        Returns: string
+      }
       rpc_agent_dismiss_attention: {
         Args: { p_conversation_id: string }
         Returns: undefined
@@ -1296,6 +1500,14 @@ export type Database = {
       rpc_cancel_appointment: {
         Args: { p_appointment_id: string; p_reason: string }
         Returns: undefined
+      }
+      rpc_client_account_summary: {
+        Args: { p_client_ids: string[] }
+        Returns: {
+          client_id: string
+          credit_balance_cents: number
+          open_debt_cents: number
+        }[]
       }
       rpc_client_spend: {
         Args: { p_client_ids?: string[] }
@@ -1392,6 +1604,7 @@ export type Database = {
           discount_cents: number
           due_date: string
           entry_id: string
+          entry_type: string
           final_cents: number
           kind: Database["public"]["Enums"]["entry_kind"]
           method: Database["public"]["Enums"]["pay_method"]
@@ -1449,6 +1662,7 @@ export type Database = {
           starts_at: string
         }[]
       }
+      rpc_get_client_account: { Args: { p_client_id: string }; Returns: Json }
       rpc_get_client_context: { Args: { p_client_id: string }; Returns: Json }
       rpc_mark_no_show: {
         Args: { p_appointment_id: string }
@@ -1519,6 +1733,16 @@ export type Database = {
       rpc_set_working_hours: {
         Args: { p_professional_id: string; p_rows: Json }
         Returns: undefined
+      }
+      rpc_settle_client_account: {
+        Args: {
+          p_client_id: string
+          p_note?: string
+          p_paid_at?: string
+          p_payments: Json
+          p_request_id: string
+        }
+        Returns: Json
       }
       rpc_suggest_professionals: {
         Args: { p_client_id: string; p_service_id: string }
@@ -1618,7 +1842,14 @@ export type Database = {
         | "cancelled"
         | "no_show"
       entry_kind: "income" | "expense"
-      pay_method: "pix" | "cash" | "debit" | "credit" | "barter"
+      pay_method:
+        | "pix"
+        | "cash"
+        | "debit"
+        | "credit"
+        | "barter"
+        | "credit_balance"
+        | "adjustment"
       service_action: "placement" | "maintenance" | "removal"
       service_category: "unhas" | "cilios" | "sobrancelhas" | "outros"
       service_kind: "standard" | "removal"
@@ -1762,7 +1993,15 @@ export const Constants = {
         "no_show",
       ],
       entry_kind: ["income", "expense"],
-      pay_method: ["pix", "cash", "debit", "credit", "barter"],
+      pay_method: [
+        "pix",
+        "cash",
+        "debit",
+        "credit",
+        "barter",
+        "credit_balance",
+        "adjustment",
+      ],
       service_action: ["placement", "maintenance", "removal"],
       service_category: ["unhas", "cilios", "sobrancelhas", "outros"],
       service_kind: ["standard", "removal"],

@@ -94,6 +94,7 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
           mode: 'complete',
           appointmentId: a.id,
           day,
+          clientId: a.client_id,
           title: toTitlePt(a.client?.name),
           detail: serviceLine(a, true),
           grossCents: entry.data.amount_cents,
@@ -112,6 +113,7 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
         target={{
           mode: 'pay',
           entryId: entry.data.entry_id,
+          clientId: a.client_id,
           title: toTitlePt(a.client?.name),
           detail: serviceLine(a, true),
           grossCents: entry.data.amount_cents,

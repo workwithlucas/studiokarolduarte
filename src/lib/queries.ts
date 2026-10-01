@@ -171,6 +171,8 @@ export function invalidateAll(qc: QueryClient) {
     'finance-list',
     'finance-entry',
     'commission-rules',
+    'client-account',
+    'client-account-summary',
   ]) {
     void qc.invalidateQueries({ queryKey: [k] })
   }

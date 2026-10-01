@@ -1,7 +1,7 @@
 // Typed wrapper around every rpc_*. The UI and the agent call the same functions.
 // Rule violations come back as error.message = code, error.details = pt-BR text.
 import type { Database } from '../types/db'
-import type { FinanceEntry, FinanceSummary, PaymentResult } from './finance'
+import type { ClientAccount, FinanceEntry, FinanceSummary, PaymentResult, SettleAllocation } from './finance'
 import { supabase } from './supabase'
 
 export { supabase }
@@ -30,6 +30,9 @@ export const ERROR_MESSAGES = {
   BAD_DISCOUNT: 'Desconto inválido para este lançamento.',
   BAD_AMOUNT: 'Valor inválido.',
   HAS_PAYMENTS: 'Existem pagamentos registrados; estorne-os primeiro.',
+  CREDIT_INSUFFICIENT: 'O crédito da cliente não cobre este valor.',
+  CREDIT_IN_USE: 'Este crédito já foi usado; estorne os usos primeiro.',
+  METHOD_NOT_ALLOWED: 'Forma de pagamento não permitida aqui.',
 } as const
 
 export type ErrorCode = keyof typeof ERROR_MESSAGES
@@ -109,6 +112,11 @@ export const rpc = {
   financeImportKeys: (a: Args<'rpc_finance_import_keys'>) => call('rpc_finance_import_keys', a),
   financeSummary: async (a: Args<'rpc_finance_summary'>) => (await call('rpc_finance_summary', a)) as unknown as FinanceSummary,
   financeList: (a: Args<'rpc_finance_list'>) => call('rpc_finance_list', a),
+  // client account (owner only)
+  addClientCredit: (a: Args<'rpc_add_client_credit'>) => call('rpc_add_client_credit', a),
+  settleClientAccount: async (a: Args<'rpc_settle_client_account'>) => (await call('rpc_settle_client_account', a)) as unknown as SettleAllocation[],
+  getClientAccount: async (a: Args<'rpc_get_client_account'>) => (await call('rpc_get_client_account', a)) as unknown as ClientAccount,
+  clientAccountSummary: (a: Args<'rpc_client_account_summary'>) => call('rpc_client_account_summary', a),
   // agent (owner only)
   agentOverview: () => call('rpc_agent_overview', undefined as never),
   agentSetSettings: (a: Args<'rpc_agent_set_settings'>) => call('rpc_agent_set_settings', a),

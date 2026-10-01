@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  allocationPreview,
+  creditExceeded,
+  creditLimit,
+  creditLineLimit,
   linesPayload,
   methodLabel,
   monthBounds,
@@ -205,5 +209,76 @@ describe('commission percent', () => {
   it('formats with a decimal comma', () => {
     expect(formatPercent('58.00')).toBe('58')
     expect(formatPercent(62.5)).toBe('62,5')
+  })
+})
+
+describe('client credit in the payment sheet', () => {
+  it('limit = min(balance, remaining)', () => {
+    expect(creditLimit(5000, 15000)).toBe(5000)
+    expect(creditLimit(20000, 15000)).toBe(15000)
+    expect(creditLimit(0, 15000)).toBe(0)
+    expect(creditLimit(5000, 0)).toBe(0)
+    expect(creditLimit(5000, -100)).toBe(0)
+  })
+  it('limit of a line discounts the other lines', () => {
+    const lines = [
+      { method: 'credit_balance' as const, cents: 3000 },
+      { method: 'pix' as const, cents: 2000 },
+      { method: 'credit_balance' as const, cents: null },
+    ]
+    // balance 5000, other credit 3000, total 15000, other lines 5000
+    expect(creditLineLimit(lines, 2, 5000, 15000)).toBe(2000)
+    expect(creditLineLimit(lines, 0, 5000, 15000)).toBe(5000)
+  })
+  it('credit lines above the balance block the receipt', () => {
+    expect(creditExceeded([{ method: 'credit_balance', cents: 5001 }], 5000)).toBe(true)
+    expect(creditExceeded([{ method: 'credit_balance', cents: 5000 }, { method: 'pix', cents: 99999 }], 5000)).toBe(false)
+  })
+  it('a service paid with credit + pix closes the entry', () => {
+    const m = paymentMath(15000, null, [{ method: 'credit_balance', cents: 5000 }, { method: 'pix', cents: 10000 }])
+    expect(m.remaining).toBe(0)
+    expect(m.canReceive).toBe(true)
+    expect(linesPayload([{ method: 'credit_balance', cents: 5000 }])).toEqual([{ amount_cents: 5000, method: 'credit_balance' }])
+  })
+  it('labels the new methods', () => {
+    expect(methodLabel('credit_balance')).toBe('Crédito da cliente')
+    expect(methodLabel('adjustment')).toBe('Saldo anterior')
+  })
+  it('extrato keeps non-cash out of the total', () => {
+    const t = totalsByMethod([
+      { method: 'cash', payment_cents: 20000, reversed_at: null },
+      { method: 'credit_balance', payment_cents: 15000, reversed_at: null },
+      { method: 'adjustment', payment_cents: 7000, reversed_at: null },
+    ])
+    expect(t.total).toBe(20000)
+    expect(t.noncash.map((x) => [x.method, x.cents])).toEqual([['credit_balance', 15000], ['adjustment', 7000]])
+  })
+})
+
+describe('settlement allocation preview', () => {
+  const entries = [
+    { entry_id: 'a', due_date: '2026-09-01', description: 'A', open_cents: 5000 },
+    { entry_id: 'b', due_date: '2026-09-05', description: 'B', open_cents: 8000 },
+    { entry_id: 'c', due_date: '2026-09-10', description: 'C', open_cents: 10000 },
+  ]
+  it('goes oldest first, partial on the last, with the remaining debt', () => {
+    const p = allocationPreview(entries, 15000)
+    expect(p.rows.map((r) => r.applied_cents)).toEqual([5000, 8000, 2000])
+    expect(p.rows.map((r) => r.left_cents)).toEqual([0, 0, 8000])
+    expect(p.remainingDebt).toBe(8000)
+    expect(p.overpay).toBe(false)
+  })
+  it('nothing entered applies nothing', () => {
+    const p = allocationPreview(entries, 0)
+    expect(p.applied).toBe(0)
+    expect(p.remainingDebt).toBe(23000)
+  })
+  it('flags a total above the debt', () => {
+    const p = allocationPreview(entries, 23001)
+    expect(p.overpay).toBe(true)
+    expect(p.applied).toBe(23000)
+  })
+  it('uses the real total debt when the list is cut at 50', () => {
+    expect(allocationPreview(entries, 1000, 99000).remainingDebt).toBe(98000)
   })
 })

@@ -25,14 +25,17 @@ const CODES: ErrorCode[] = [
   'BAD_DISCOUNT',
   'BAD_AMOUNT',
   'HAS_PAYMENTS',
+  'CREDIT_INSUFFICIENT',
+  'CREDIT_IN_USE',
+  'METHOD_NOT_ALLOWED',
 ]
 
 afterEach(() => vi.restoreAllMocks())
 
 describe('error mapping', () => {
-  it('covers all 23 codes', () => {
+  it('covers all 26 codes', () => {
     expect(Object.keys(ERROR_MESSAGES).sort()).toEqual([...CODES].sort())
-    expect(CODES).toHaveLength(23)
+    expect(CODES).toHaveLength(26)
   })
 
   it.each(CODES)('%s maps to its pt-BR message', async (code) => {

@@ -50,6 +50,7 @@ function SellForm({ initial, onClose }: { initial: PickedClient | null; onClose:
       setPayFor({
         mode: 'pay',
         entryId: entry.entry_id,
+        clientId: client.id,
         title: toTitlePt(client.name),
         detail: tpl ? `${tpl.name} · ${tpl.sessions_total}x` : entry.description,
         grossCents: entry.amount_cents,

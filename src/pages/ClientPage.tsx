@@ -8,6 +8,7 @@ import { AppointmentSheet } from '../features/agenda/AppointmentSheet'
 import { serviceLine, StatusPill } from '../features/agenda/common'
 import { NewAppointmentSheet } from '../features/agenda/NewAppointmentSheet'
 import { Avatar, dayMonth, SegmentPill, WhatsAppButton } from '../features/clients/common'
+import { ClientAccountSection } from '../features/finance/ClientAccount'
 import { ClientFinance } from '../features/finance/ClientFinance'
 import { EditClientSheet } from '../features/clients/ClientSheets'
 import { SellPackageSheet } from '../features/packages/PackageSheets'
@@ -153,6 +154,7 @@ export function ClientPage() {
         ) : null}
       </section>
 
+      {isOwner && <ClientAccountSection clientId={c.id} />}
       {isOwner && <ClientFinance clientId={c.id} />}
 
       <section>

@@ -20,8 +20,9 @@ Regras deste roteiro:
 7. Importar clientes (passo 18)
 8. Importar agendamentos (passo 19)
 9. Financeiro: comissões e o "a receber" antigo (passo 19b)
-10. Agente em modo *Teste* (passo 20)
-11. Agente em modo *No ar* (passo 21)
+10. Conta da cliente, Tarefa 9: backup, depois `supabase db push` (passo 19c)
+11. Agente em modo *Teste* (passo 20)
+12. Agente em modo *No ar* (passo 21)
 
 Os demais passos (contas, Vault do cron, hospedagem do app, webhook da Z-API) entram no meio dessa ordem, na numeração abaixo. O app precisa estar publicado (passos 14 e 15) antes das importações, porque elas são feitas por ele.
 
@@ -273,6 +274,33 @@ O agente sai de fábrica **Desligado**. Não pule etapas:
 2. **Importar o "a receber" antigo.** *Financeiro* > *Importar* (só CSV). Colunas: `cliente` (ou `nome`), `vencimento` (ou `data`), `valor`; opcional: `descricao` (ou `obs`). A cliente precisa já estar em *Clientes* (faça o passo 18 antes): linhas sem correspondência, com data ou valor inválido são ignoradas e listadas, nada é criado. Confira o resumo, confirme, e baixe a lista de erros no final. Importar o mesmo arquivo de novo não cria nada.
 3. **Conferir.** Em *A receber*, o bloco *Vencidos* traz o que já passou do vencimento, inclusive de meses anteriores. Dê baixa em cada item pelo menu "..." (*Dar baixa*): informe desconto e forma de pagamento (pode dividir em Pix, dinheiro, débito, crédito e permuta) ou receba só uma parte.
 4. **Dia a dia.** Ao concluir um atendimento pela agenda, a Karol vê a tela de recebimento (*Concluir e receber* ou *Concluir, receber depois*). Recebimentos errados são desfeitos em *Extrato* > toque no pagamento > *Estornar*. Despesas: *+ Lançamento* > *Nova despesa*. Pacote vendido também abre o recebimento.
+
+**19c. Conta da cliente: crédito e dívida em aberto (Tarefa 9).** Faça nesta ordem, com o Supabase de produção já vinculado (passo 6). Se o banco de produção ainda está só até a Tarefa 8, este passo traz as três migrations novas (`20261005120000`, `20261005120100`, `20261005120200`).
+
+1. **Backup antes de mexer no banco** (a migration recria a view `v_ledger`):
+
+```powershell
+$env:DATABASE_URL = Read-Host "DATABASE_URL de produção"
+```
+
+```powershell
+npm run backup
+```
+
+2. **Aplique as migrations:**
+
+```powershell
+supabase db push
+```
+
+3. **Publique o app** (passos 14 e 15), para a tela acompanhar o banco novo.
+4. **Conferir (só a Karol vê).** Em *Clientes* > cliente > *Conta da cliente*:
+   - *Adicionar crédito*: valor, forma (Pix, dinheiro, débito, crédito) e observação. O valor entra no *Recebido (caixa)*. Para um saldo que a cliente já tinha antes do sistema, ligue *Saldo anterior, sem entrada no caixa*: o crédito sobe, o caixa não muda.
+   - *Receber da conta*: reparte o valor entre os lançamentos em aberto, do mais antigo para o mais novo, e mostra a dívida que sobra. Permuta e *Crédito da cliente* não entram no caixa.
+   - Ao receber um atendimento, aparece a opção *Crédito da cliente (R$ X)* quando ela tem saldo.
+   - *Financeiro* > *+ Lançamento* > *Crédito de cliente*; *Financeiro* > *Análise* > *Contas de clientes*.
+5. Estornar um crédito já usado é bloqueado (*Este crédito já foi usado*): estorne antes o pagamento que usou o crédito.
+6. A Thaís não vê crédito nem dívida de ninguém; nada muda no agente.
 
 **20. Modo Teste com o seu telefone.** No app, *Agente*: em *Teste* adicione o seu número (com DDD) e escolha *Teste*. Mande mensagens do seu celular e confira:
 

@@ -3,7 +3,8 @@ import { Plus, X } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Button, Chip, ChipRow, FieldLabel, Input, Kicker, MoneyInput, Sheet, useSnackbar } from '../../components/ui'
 import { toSaoPauloISO } from '../../lib/datetime'
-import { linesPayload, PAY_METHODS, paymentMath, type PayLine, type PayMethod } from '../../lib/finance'
+import { creditExceeded, creditLineLimit, CREDIT_METHOD, linesPayload, PAY_METHODS, paymentMath, type PayLine, type PayMethod } from '../../lib/finance'
+import { useClientAccountSummary } from '../../lib/financeQueries'
 import { formatBRL } from '../../lib/money'
 import { invalidateAll } from '../../lib/queries'
 import { messageOf, rpc } from '../../lib/rpc'
@@ -22,6 +23,8 @@ export interface PayTarget {
   grossCents: number
   discountCents?: number
   paidCents?: number
+  /** Income: the client, so the sheet can offer the client credit. */
+  clientId?: string | null
   /** Expenses: no discount field, no barter. */
   kind?: 'income' | 'expense'
 }
@@ -49,6 +52,9 @@ export function PaymentPanel({ target, onDone, onCancel }: { target: PayTarget; 
   const complete = target.mode === 'complete'
   const gross = target.grossCents
   const paid = target.paidCents ?? 0
+  const clientId = !expense ? (target.clientId ?? null) : null
+  const account = useClientAccountSummary(clientId ? [clientId] : [], !!clientId)
+  const balance = clientId ? (account.data?.get(clientId)?.balance ?? 0) : 0
 
   const [discount, setDiscount] = useState<number | null>(target.discountCents ? target.discountCents : null)
   const [lines, setLines] = useState<PayLine[]>([{ method: 'pix', cents: null }])
@@ -60,13 +66,21 @@ export function PaymentPanel({ target, onDone, onCancel }: { target: PayTarget; 
   const effective: PayLine[] =
     lines.length === 1 && lines[0]!.cents === null ? [{ ...lines[0]!, cents: base.total > 0 ? base.total : null }] : lines
   const m = paymentMath(gross, discount, effective, paid)
-  const methods = expense ? PAY_METHODS.filter((x) => x.value !== 'barter') : PAY_METHODS
+  const canReceive = m.canReceive && !creditExceeded(effective, balance)
+  const baseMethods: Array<{ value: PayMethod; label: string }> = expense ? PAY_METHODS.filter((x) => x.value !== 'barter') : PAY_METHODS
+  const methods = balance > 0 ? [...baseMethods, { value: CREDIT_METHOD.value, label: `${CREDIT_METHOD.label} (${formatBRL(balance)})` }] : baseMethods
   const packageSession = complete && gross === 0
 
   function setLine(i: number, patch: Partial<PayLine>) {
     setLines((cur) => {
       const start = cur.length === 1 && cur[0]!.cents === null ? effective : cur
-      return start.map((l, j) => (j === i ? { ...l, ...patch } : l))
+      const next = start.map((l, j) => (j === i ? { ...l, ...patch } : l))
+      const line = next[i]!
+      if (line.method !== 'credit_balance') return next
+      // Credit line: limited to min(balance, remaining).
+      const limit = creditLineLimit(next, i, balance, base.total)
+      const cents = patch.method === 'credit_balance' ? (limit > 0 ? limit : null) : line.cents === null ? null : Math.min(line.cents, limit)
+      return next.map((l, j) => (j === i ? { ...l, cents } : l))
     })
   }
 
@@ -206,7 +220,7 @@ export function PaymentPanel({ target, onDone, onCancel }: { target: PayTarget; 
           </Button>
         ) : (
           <>
-            <Button loading={pending} disabled={!m.canReceive} onClick={() => void submit(true)}>
+            <Button loading={pending} disabled={!canReceive} onClick={() => void submit(true)}>
               {complete ? 'Concluir e receber' : expense ? 'Pagar' : 'Receber'}
             </Button>
             {complete ? (

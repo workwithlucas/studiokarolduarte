@@ -29,13 +29,15 @@ import {
   PaymentDetailSheet,
   type MenuAction,
 } from '../features/finance/EntrySheets'
+import { ClientCreditFlowSheet } from '../features/finance/ClientAccount'
 import { ImportReceivablesSheet } from '../features/finance/ImportReceivablesSheet'
 import { PaymentSheet, type PayTarget } from '../features/finance/PaymentSheet'
 import { formatDate, todaySP, ymdOf } from '../lib/datetime'
 import {
+  ALL_METHODS,
+  isNonCash,
   methodLabel,
   monthLabel,
-  PAY_METHODS,
   resolvePeriod,
   shiftMonth,
   statementToCsv,
@@ -76,6 +78,7 @@ export function FinanceiroPage() {
   const [importOpen, setImportOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [newKind, setNewKind] = useState<'expense' | 'income' | null>(null)
+  const [creditOpen, setCreditOpen] = useState(false)
 
   const pros = useProfessionals()
   const { from, to } = resolvePeriod(ym, custom)
@@ -130,7 +133,7 @@ export function FinanceiroPage() {
             onChange={(e) => setMethod(e.target.value)}
           >
             <option value="">Todas as formas</option>
-            {PAY_METHODS.map((m) => (
+            {ALL_METHODS.map((m) => (
               <option key={m.value} value={m.value}>
                 {m.label}
               </option>
@@ -213,9 +216,11 @@ export function FinanceiroPage() {
         actions={[
           { label: 'Nova despesa', onClick: () => setNewKind('expense') },
           { label: 'Receita avulsa', onClick: () => setNewKind('income') },
+          { label: 'Crédito de cliente', onClick: () => setCreditOpen(true) },
         ]}
       />
       <NewEntrySheet kind={newKind} onClose={() => setNewKind(null)} />
+      <ClientCreditFlowSheet open={creditOpen} onClose={() => setCreditOpen(false)} />
     </div>
   )
 }
@@ -313,6 +318,7 @@ function payTargetOf(r: FinanceRow): PayTarget {
     return {
       mode: 'complete',
       appointmentId: r.appointment_id,
+      clientId: r.client_id,
       day: ymdOf(r.appointment_starts_at),
       title: who,
       detail,
@@ -324,6 +330,7 @@ function payTargetOf(r: FinanceRow): PayTarget {
   return {
     mode: 'pay',
     entryId: r.entry_id,
+    clientId: r.client_id,
     title: who,
     detail: `${detail} · vence ${formatDate(r.due_date)}`,
     grossCents: r.amount_cents,
@@ -580,7 +587,7 @@ function Statement({ from, to, proId, method, query }: { from: string; to: strin
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-1">
                     <Pill tone={r.method === 'barter' ? 'primary' : 'neutral'}>{methodLabel(r.method)}</Pill>
-                    <p className="title-serif text-lg">{formatBRL(r.payment_cents)}</p>
+                    <p className={`title-serif text-lg ${isNonCash(r.method) ? 'text-muted' : ''}`}>{formatBRL(r.payment_cents)}</p>
                   </div>
                 </button>
               </li>
@@ -601,6 +608,19 @@ function Statement({ from, to, proId, method, query }: { from: string; to: strin
                 <span className="title-serif">{formatBRL(totals.total)}</span>
               </li>
             </ul>
+            {totals.noncash.length > 0 && (
+              <div className="mt-3 border-t border-line pt-3">
+                <Kicker className="mb-2">Fora do caixa</Kicker>
+                <ul className="space-y-1">
+                  {totals.noncash.map((t) => (
+                    <li key={t.method} className="flex justify-between">
+                      <span>{t.label}</span>
+                      <span className="title-serif">{formatBRL(t.cents)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         </>
       )}
@@ -673,6 +693,51 @@ function Analysis({ s, loading }: { s: FinanceSummary | undefined; loading: bool
             )}
           </tbody>
         </table>
+        {s.noncash_by_method.length > 0 && (
+          <div className="mt-4">
+            <Kicker className="mb-1">Fora do caixa</Kicker>
+            <table className="w-full max-w-md text-base">
+              <tbody>
+                {s.noncash_by_method.map((m) => (
+                  <tr key={m.method} className="border-b border-line">
+                    <td className={td}>{methodLabel(m.method)}</td>
+                    <td className={td}>{m.count}</td>
+                    <td className={td}>{formatBRL(m.cents)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section>
+        <SectionHeader>Contas de clientes</SectionHeader>
+        <dl className="grid max-w-md grid-cols-2 gap-3">
+          <div>
+            <Kicker>Créditos</Kicker>
+            <p className="title-serif text-xl">{formatBRL(s.accounts.credit_total_cents)}</p>
+          </div>
+          <div>
+            <Kicker>Dívidas em aberto</Kicker>
+            <p className="title-serif text-xl">{formatBRL(s.accounts.open_debt_total_cents)}</p>
+          </div>
+        </dl>
+        {s.accounts.top.length > 0 && (
+          <ul className="mt-3 max-w-md space-y-2">
+            {s.accounts.top.map((t) => (
+              <li key={t.client_id}>
+                <Link to={`/clientes/${t.client_id}`} className="hit flex items-center justify-between gap-3 rounded-[var(--radius-input)] border border-line bg-surface px-4 py-3">
+                  <span className="title-serif truncate text-lg">{toTitlePt(t.client)}</span>
+                  <span className="flex shrink-0 flex-wrap justify-end gap-2">
+                    {t.balance_cents > 0 && <Pill tone="success">Crédito {formatBRL(t.balance_cents)}</Pill>}
+                    {t.debt_cents > 0 && <Pill tone="danger">Em aberto {formatBRL(t.debt_cents)}</Pill>}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <section>

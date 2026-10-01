@@ -239,6 +239,143 @@ async function appointmentImportFlow(maraId: string) {
   }
 }
 
+/** Client account (task 9): deposit, use credit on an appointment, settle debt with Permuta, Mara FORBIDDEN. Starts and ends as Karol. */
+async function accountFlow(maraId: string) {
+  const today = todaySP()
+  const { data: svcRows } = await supabase.from('services').select('id').eq('name', 'ZZ Conta Fluxo')
+  const svcId = await rpc.upsertService({
+    p_id: svcRows?.[0]?.id ?? null,
+    p_name: 'ZZ Conta Fluxo',
+    p_category: 'unhas',
+    p_kind: 'standard',
+    p_duration_min: 30,
+    p_price_cents: 5000,
+    p_maintenance_duration_min: null,
+    p_maintenance_price_cents: null,
+    p_cash_price_cents: null,
+    p_active: true,
+  })
+  const { data: links } = await supabase.from('professional_services').select('service_id').eq('professional_id', maraId)
+  await rpc.setProfessionalServices({
+    p_professional_id: maraId,
+    p_service_ids: [...new Set([...(links ?? []).map((l) => l.service_id), svcId])],
+  })
+  const tag = String(Date.now() % 100000000).padStart(8, '0')
+  const clientId = await rpc.upsertClient({ p_name: `ZZ Conta Fluxo ${tag}`, p_phone: `11 9${tag}`, p_external_code: null, p_birthday: null, p_notes: null })
+
+  // ---- deposit
+  const depReq = crypto.randomUUID()
+  const dep = await rpc.addClientCredit({ p_client_id: clientId, p_amount_cents: 20000, p_method: 'pix', p_note: 'ZZ deposito', p_request_id: depReq, p_opening: false, p_paid_at: null })
+  const dep2 = await rpc.addClientCredit({ p_client_id: clientId, p_amount_cents: 20000, p_method: 'pix', p_note: 'ZZ deposito', p_request_id: depReq, p_opening: false, p_paid_at: null })
+  check('account: deposit is idempotent', dep === dep2)
+  let acct = await rpc.getClientAccount({ p_client_id: clientId })
+  check('account: balance 200 after the deposit', acct.credit_balance_cents === 20000 && acct.open_debt_cents === 0, JSON.stringify(acct))
+  check('account: deposit shows in movements', acct.movements.some((m) => m.type === 'deposit' && m.amount_cents === 20000))
+  await expectCode('account: deposit with barter -> METHOD_NOT_ALLOWED', 'METHOD_NOT_ALLOWED', () =>
+    rpc.addClientCredit({ p_client_id: clientId, p_amount_cents: 100, p_method: 'barter', p_note: null, p_request_id: crypto.randomUUID(), p_opening: false, p_paid_at: null }),
+  )
+
+  // ---- use credit on an appointment (credit + pix)
+  const avail = await rpc.getAvailability({
+    p_professional_id: maraId,
+    p_service_id: svcId,
+    p_action: 'placement',
+    p_addon_ids: [],
+    p_from: addDaysYMD(today, 3),
+    p_to: addDaysYMD(today, 30),
+    p_source: 'staff',
+  })
+  const slot = avail.at(-2) ?? avail.at(-1)
+  if (!slot) throw new Error('no free slot for the account flow')
+  const apptId = await rpc.bookAppointment({
+    p_client_id: clientId,
+    p_professional_id: maraId,
+    p_service_id: svcId,
+    p_action: 'placement',
+    p_addon_ids: [],
+    p_starts_at: slot.starts_at,
+    p_source: 'staff',
+    p_idempotency_key: crypto.randomUUID(),
+    p_notes: null,
+    p_client_package_id: null,
+  })
+  const paid = await rpc.completeAndPay({
+    p_appointment_id: apptId,
+    p_actual_end: null,
+    p_discount_cents: null,
+    p_payments: [
+      { amount_cents: 3000, method: 'credit_balance' },
+      { amount_cents: 2000, method: 'pix' },
+    ],
+    p_request_id: crypto.randomUUID(),
+  })
+  check('account: appointment paid with credit + pix', paid.status === 'paid' && paid.paid_cents === 5000, JSON.stringify(paid))
+  acct = await rpc.getClientAccount({ p_client_id: clientId })
+  check('account: balance 170 after using 30', acct.credit_balance_cents === 17000, String(acct.credit_balance_cents))
+  await expectCode('account: credit above the balance -> CREDIT_INSUFFICIENT', 'CREDIT_INSUFFICIENT', async () => {
+    const e = await rpc.createManualEntry({
+      p_kind: 'income', p_description: 'ZZ Conta acima', p_category: null, p_amount_cents: 30000, p_due_date: addDaysYMD(today, -1),
+      p_client_id: clientId, p_professional_id: null, p_pay_now: false, p_method: null, p_import_key: null,
+    })
+    await rpc.registerPayments({ p_entry_id: e, p_discount_cents: null, p_payments: [{ amount_cents: 18000, method: 'credit_balance' }], p_request_id: crypto.randomUUID(), p_paid_at: null })
+  })
+
+  // ---- debt: two old entries (40 + 60) plus the 300 left above; settle 70 with Pix + Permuta, oldest first
+  const mk = (desc: string, cents: number, daysAgo: number) =>
+    rpc.createManualEntry({
+      p_kind: 'income', p_description: desc, p_category: null, p_amount_cents: cents, p_due_date: addDaysYMD(today, -daysAgo),
+      p_client_id: clientId, p_professional_id: null, p_pay_now: false, p_method: null, p_import_key: null,
+    })
+  const e1 = await mk('ZZ Conta divida A', 4000, 60)
+  await mk('ZZ Conta divida B', 6000, 50)
+  acct = await rpc.getClientAccount({ p_client_id: clientId })
+  check('account: open debt = 40 + 60 + 300', acct.open_debt_cents === 40000 && acct.open_entries[0]?.entry_id === e1, JSON.stringify(acct.open_entries))
+  const settleReq = crypto.randomUUID()
+  const lines = [
+    { amount_cents: 3000, method: 'pix' as const },
+    { amount_cents: 4000, method: 'barter' as const },
+  ]
+  const res = await rpc.settleClientAccount({ p_client_id: clientId, p_payments: lines, p_request_id: settleReq, p_note: 'ZZ ref', p_paid_at: null })
+  check('account: settlement allocates 3 rows oldest first', res.length === 3 && res[0]?.entry_id === e1, JSON.stringify(res))
+  const res2 = await rpc.settleClientAccount({ p_client_id: clientId, p_payments: lines, p_request_id: settleReq, p_note: 'ZZ ref', p_paid_at: null })
+  check('account: same request id returns the same result', JSON.stringify(res2) === JSON.stringify(res))
+  acct = await rpc.getClientAccount({ p_client_id: clientId })
+  check('account: debt 330 after settling 70', acct.open_debt_cents === 33000, String(acct.open_debt_cents))
+  await expectCode('account: adjustment in a settlement -> METHOD_NOT_ALLOWED', 'METHOD_NOT_ALLOWED', () =>
+    rpc.settleClientAccount({ p_client_id: clientId, p_payments: [{ amount_cents: 100, method: 'adjustment' }], p_request_id: crypto.randomUUID(), p_note: null, p_paid_at: null }),
+  )
+  await expectCode('account: settlement above the debt -> OVERPAYMENT', 'OVERPAYMENT', () =>
+    rpc.settleClientAccount({ p_client_id: clientId, p_payments: [{ amount_cents: 33001, method: 'pix' }], p_request_id: crypto.randomUUID(), p_note: null, p_paid_at: null }),
+  )
+  const sum = await rpc.clientAccountSummary({ p_client_ids: [clientId] })
+  check('account: summary matches', sum[0]?.credit_balance_cents === 17000 && sum[0].open_debt_cents === 33000, JSON.stringify(sum))
+
+  // settle everything: credit 170 + Pix 160
+  await rpc.settleClientAccount({
+    p_client_id: clientId,
+    p_payments: [{ amount_cents: 17000, method: 'credit_balance' }, { amount_cents: 16000, method: 'pix' }],
+    p_request_id: crypto.randomUUID(), p_note: null, p_paid_at: null,
+  })
+  acct = await rpc.getClientAccount({ p_client_id: clientId })
+  check('account: all settled, no credit left', acct.open_debt_cents === 0 && acct.credit_balance_cents === 0, JSON.stringify(acct))
+  const fin = await rpc.financeSummary({ p_from: today, p_to: today, p_professional_id: null })
+  check('account: summary has accounts and a non-cash list', typeof fin.accounts.credit_total_cents === 'number' && fin.noncash_by_method.some((m) => m.method === 'credit_balance'))
+
+  // ---- Mara: FORBIDDEN on every new RPC
+  await login('mara@studio.test')
+  await expectCode('mara: add_client_credit -> FORBIDDEN', 'FORBIDDEN', () =>
+    rpc.addClientCredit({ p_client_id: clientId, p_amount_cents: 100, p_method: 'pix', p_note: null, p_request_id: crypto.randomUUID(), p_opening: false, p_paid_at: null }),
+  )
+  await expectCode('mara: settle_client_account -> FORBIDDEN', 'FORBIDDEN', () =>
+    rpc.settleClientAccount({ p_client_id: clientId, p_payments: [{ amount_cents: 100, method: 'pix' }], p_request_id: crypto.randomUUID(), p_note: null, p_paid_at: null }),
+  )
+  await expectCode('mara: get_client_account -> FORBIDDEN', 'FORBIDDEN', () => rpc.getClientAccount({ p_client_id: clientId }))
+  await expectCode('mara: client_account_summary -> FORBIDDEN', 'FORBIDDEN', () => rpc.clientAccountSummary({ p_client_ids: [clientId] }))
+  const { data: va } = await supabase.from('v_client_account').select('client_id')
+  check('mara: no SELECT on v_client_account', (va ?? []).length === 0)
+  await login('karol@studio.test')
+}
+
 /** Finance: complete_and_pay with discount + split, statement, reverse, expense, receivables import (twice), Mara FORBIDDEN. */
 async function financeFlow(maraId: string) {
   const today = todaySP()
@@ -653,6 +790,8 @@ async function main() {
   await appointmentImportFlow(mara.id)
   await login('karol@studio.test')
   await financeFlow(mara.id)
+  await login('karol@studio.test')
+  await accountFlow(mara.id)
 
   // ---- cleanup + invariants
   await login('karol@studio.test')
