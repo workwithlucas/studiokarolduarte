@@ -629,6 +629,114 @@ sc('18 owner RPCs: only the owner, settings validated', async () => {
   check('anon cannot call owner rpcs', !!e3, 'no error')
 })
 
+// ---------------------------------------------------------------- packages (task 8)
+async function sellPackage(clientId: string, serviceId: string, sessions: number): Promise<string> {
+  const name = `ZZA Pacote ${sessions}`
+  const t = await q<{ id: string }>('select id from package_templates where name = $1 and service_id = $2', [name, serviceId])
+  const tid = t[0]?.id ?? (await q<{ id: string }>('select rpc_upsert_package_template(null,$1,$2,$3,90,20000,true) as id', [name, serviceId, sessions]))[0]!.id
+  return (await q<{ id: string }>('select rpc_sell_package($1,$2) as id', [clientId, tid]))[0]!.id
+}
+const availFor = (serviceId: string) => (c: Ctx) =>
+  [tu('get_availability', { professional_id: maraId, service_id: serviceId, action: 'placement', addon_ids: [], from_date: addDays(today(), 1), to_date: addDays(today(), 10) })]
+const firstSlot = (c: Ctx) => c.last('get_availability').days[0].slots[0].starts_at as string
+
+sc('19 package booking consumes a session, ledger amount 0', async () => {
+  const phone = P(23)
+  const cid = await newClient('ZZA Pat Pacote', phone)
+  const pkgId = await sellPackage(cid, svcId, 3)
+  world.script = [
+    () => [tu('lookup_client')],
+    (c) => {
+      const p = c.last('lookup_client').context.active_packages
+      check('active package in context', p.length === 1 && p[0].remaining === 3)
+      return availFor(svcId)(c)
+    },
+    (c) => [tu('propose_booking', { client_id: cid, professional_id: maraId, service_id: svcId, action: 'placement', addon_ids: [], starts_at: firstSlot(c), use_package: true })],
+    (c) => {
+      const s = c.last('propose_booking').summary
+      check('summary states package use and no price', /sessão do seu pacote \(restam 2\)/.test(s.pacote) && s.valor === undefined)
+      return [text('Vai usar uma sessão do seu pacote (restam 2). Posso confirmar?')]
+    },
+  ]
+  await say(phone, 'quero marcar manicure')
+  check('client_package_id stored in pending', (await convOf(phone)).pending_action?.params.client_package_id === pkgId)
+  world.script = [() => [tu('confirm_pending')], () => [text('Pronto!')]]
+  await say(phone, 'sim')
+  const a = await apptsOf(cid)
+  check('appointment linked to the package', a.length === 1 && a[0].client_package_id === pkgId && a[0].source === 'agent')
+  const rem = (await q<any>('select remaining from v_client_packages where client_package_id = $1', [pkgId]))[0]?.remaining
+  check('one session consumed', Number(rem) === 2, String(rem))
+  const l = await q<any>('select amount_cents from ledger_entries where appointment_id = $1 and voided_at is null', [a[0]?.id])
+  check('ledger amount is 0', l.length === 1 && l[0].amount_cents === 0, JSON.stringify(l))
+  check('no price in the messages to the client', !sentTo(phone).some((s) => /R\$/.test(s.message)))
+})
+
+sc('20 empty package falls back to a paid booking plus note_for_karol', async () => {
+  const phone = P(24)
+  const cid = await newClient('ZZA Eva Vazia', phone)
+  const pkgId = await sellPackage(cid, svcId, 1)
+  world.script = [
+    () => [tu('lookup_client')],
+    availFor(svcId),
+    (c) => [tu('propose_booking', { client_id: cid, professional_id: maraId, service_id: svcId, action: 'placement', addon_ids: [], starts_at: firstSlot(c), use_package: true })],
+    () => [text('Vai usar uma sessão do seu pacote (restam 0). Posso confirmar?')],
+  ]
+  await say(phone, 'quero marcar manicure')
+  // the last session is used elsewhere before the client answers
+  const slotsList = spaced(await slots(milenaId, 2, 12), 1)
+  await q('select rpc_book_appointment($1,$2,$3,\'placement\',\'{}\'::uuid[],$4::timestamptz,\'staff\',$5,null,$6,false)', [cid, milenaId, svcId, slotsList[0], `zza-${Math.random()}`, pkgId])
+  world.script = [
+    () => [tu('confirm_pending')],
+    (c) => {
+      const o = c.last('confirm_pending')
+      check('structured PACKAGE_EMPTY error', o.ok === false && o.error === 'PACKAGE_EMPTY', JSON.stringify(o))
+      return availFor(svcId)(c)
+    },
+    (c) => [tu('propose_booking', { client_id: cid, professional_id: maraId, service_id: svcId, action: 'placement', addon_ids: [], starts_at: firstSlot(c) })],
+    (c) => {
+      check('paid proposal shows the price', typeof c.last('propose_booking').summary.valor === 'string')
+      return [tu('note_for_karol', { text: 'Pacote sem sessões: cliente foi para agendamento pago.' })]
+    },
+    () => [text('Seu pacote não tem mais sessões. Esse horário fica como atendimento avulso, tudo bem?')],
+  ]
+  await say(phone, 'sim')
+  const c = await convOf(phone)
+  check('paid pending stored without package', c.pending_action?.type === 'book' && !c.pending_action.params.client_package_id)
+  check('note_for_karol flagged the conversation', c.needs_attention === true)
+  world.script = [() => [tu('confirm_pending')], () => [text('Pronto!')]]
+  await say(phone, 'pode ser')
+  const a = (await apptsOf(cid)).filter((x) => x.source === 'agent')
+  const l = await q<any>('select amount_cents from ledger_entries where appointment_id = $1 and voided_at is null', [a[0]?.id])
+  check('paid booking has no package and a full ledger amount', a.length === 1 && a[0].client_package_id === null && l[0]?.amount_cents === 8000, JSON.stringify(l))
+})
+
+sc('21 a package for another service is ignored', async () => {
+  const phone = P(25)
+  const cid = await newClient('ZZA Lia Outro', phone)
+  const other = (await q<{ id: string }>("select id from services where name = 'ZZA Cílios'"))[0]?.id ??
+    (await q<{ id: string }>("select rpc_upsert_service(null,'ZZA Cílios','cilios','standard',90,12000,60,9000,null,true) as id"))[0]!.id
+  await sellPackage(cid, other, 4)
+  world.script = [
+    () => [tu('lookup_client')],
+    availFor(svcId),
+    (c) => [tu('propose_booking', { client_id: cid, professional_id: maraId, service_id: svcId, action: 'placement', addon_ids: [], starts_at: firstSlot(c), use_package: true })],
+    (c) => {
+      const o = c.last('propose_booking')
+      check('use_package refused for the other service', o.ok === false && o.error === 'PACKAGE_INVALID', JSON.stringify(o))
+      check('nothing pending', true)
+      return [tu('propose_booking', { client_id: cid, professional_id: maraId, service_id: svcId, action: 'placement', addon_ids: [], starts_at: firstSlot(c) })]
+    },
+    () => [text('Fica R$ 80,00. Posso confirmar?')],
+  ]
+  await say(phone, 'quero manicure')
+  world.script = [() => [tu('confirm_pending')], () => [text('Pronto!')]]
+  await say(phone, 'sim')
+  const a = await apptsOf(cid)
+  const pk = (await q<any>('select remaining from v_client_packages where client_id = $1', [cid]))[0]?.remaining
+  const l = await q<any>('select amount_cents from ledger_entries where appointment_id = $1 and voided_at is null', [a[0]?.id])
+  check('paid booking, other package untouched', a.length === 1 && a[0].client_package_id === null && Number(pk) === 4 && l[0]?.amount_cents === 8000, JSON.stringify([pk, l]))
+})
+
 // ---------------------------------------------------------------- run
 async function main() {
   await pgc.connect()

@@ -57,6 +57,7 @@ export const TOOL_DEFS: ToolDef[] = [
       properties: {
         client_id: uuid, professional_id: uuid, service_id: uuid, action: { type: 'string', enum: [...ACTIONS] },
         addon_ids: { type: 'array', items: uuid }, starts_at: { type: 'string', description: 'starts_at exatamente como devolvido por get_availability' },
+        use_package: { type: 'boolean', description: 'true quando active_packages da cliente cobre este serviço: usa uma sessão do pacote' },
       },
       required: ['client_id', 'professional_id', 'service_id', 'action', 'starts_at'],
     },
@@ -320,6 +321,7 @@ async function proposeBooking(ctx: ToolCtx, a: Record<string, unknown>): Promise
   const act = argEnum(a.action, ACTIONS, 'action')
   const addons = argUuidList(a.addon_ids, 'addon_ids')
   for (const r of [client, pro, svc, act, addons]) if (!r.ok) return invalid(r)
+  if (a.use_package !== undefined && a.use_package !== null && typeof a.use_package !== 'boolean') return fail('INVALID_ARGUMENT', 'use_package deve ser verdadeiro ou falso')
   const clientId = (client as any).value as string
   if (!isKnownClient(ctx.conv, clientId)) return fail('NOT_ALLOWED', 'Esta cliente não pertence a esta conversa. Use lookup_client / choose_client.')
   const startsMs = parseInstant(a.starts_at)
@@ -338,12 +340,35 @@ async function proposeBooking(ctx: ToolCtx, a: Record<string, unknown>): Promise
   const price = base + ads.reduce((n, x) => n + x.price_delta_cents, 0)
   const dur = (q.action === 'maintenance' ? (s.maintenance_duration_min ?? s.duration_min) : s.duration_min) + ads.reduce((n, x) => n + x.duration_delta_min, 0)
 
-  const summary = {
-    servico: s.name, acao: q.action, adicionais: ads.map((x) => x.name), dia_e_hora: humanSlot(startsMs), profissional: p.name,
-    duracao_min: dur, valor: formatBRL(price),
+  // Package session: the client's packages are re-read from the database, never taken from the model.
+  let pkg: { id: string; remaining: number } | null = null
+  if (a.use_package === true) {
+    const found = await findPackage(ctx, clientId, q.serviceId, spParts(startsMs).ymd)
+    if (!found.ok) return found.out
+    pkg = found.pkg
   }
-  await writePending(ctx, 'book', { client_id: clientId, professional_id: q.professionalId, service_id: q.serviceId, action: q.action, addon_ids: q.addonIds, starts_at: isoOf(startsMs) }, summary)
+  const summary: Record<string, unknown> = {
+    servico: s.name, acao: q.action, adicionais: ads.map((x) => x.name), dia_e_hora: humanSlot(startsMs), profissional: p.name,
+    duracao_min: dur,
+    ...(pkg ? { pacote: `vai usar uma sessão do seu pacote (restam ${pkg.remaining - 1})` } : { valor: formatBRL(price) }),
+  }
+  await writePending(ctx, 'book', {
+    client_id: clientId, professional_id: q.professionalId, service_id: q.serviceId, action: q.action, addon_ids: q.addonIds, starts_at: isoOf(startsMs),
+    ...(pkg ? { client_package_id: pkg.id } : {}),
+  }, summary)
   return { ok: true, summary, next: pending_msg }
+}
+
+/** An active package of this (known) client that covers the service on the booking day, with sessions left. */
+async function findPackage(ctx: ToolCtx, clientId: string, serviceId: string, ymd: string): Promise<{ ok: true; pkg: { id: string; remaining: number } } | { ok: false; out: Out }> {
+  const c = await callRpc<Record<string, any>>(ctx.deps.db, 'rpc_get_client_context', { p_client_id: clientId })
+  const covering = ((c.active_packages as Array<Record<string, any>>) ?? []).filter((p) => p.service_id === serviceId)
+  if (!covering.length) return { ok: false, out: fail('PACKAGE_INVALID', 'A cliente não tem pacote ativo para este serviço.') }
+  const withSessions = covering.filter((p) => p.remaining > 0)
+  if (!withSessions.length) return { ok: false, out: fail('PACKAGE_EMPTY', 'O pacote não tem mais sessões.') }
+  const valid = withSessions.find((p) => String(p.expires_at).slice(0, 10) >= ymd)
+  if (!valid) return { ok: false, out: fail('PACKAGE_EXPIRED', 'O pacote vence antes da data escolhida.') }
+  return { ok: true, pkg: { id: valid.client_package_id as string, remaining: valid.remaining as number } }
 }
 
 async function proposeReschedule(ctx: ToolCtx, a: Record<string, unknown>): Promise<Out> {
@@ -394,6 +419,7 @@ async function confirmPending(ctx: ToolCtx): Promise<Out> {
       const id = await callRpc<string>(db, 'rpc_book_appointment', {
         p_client_id: prm.client_id, p_professional_id: prm.professional_id, p_service_id: prm.service_id, p_action: prm.action,
         p_addon_ids: prm.addon_ids, p_starts_at: prm.starts_at, p_source: 'agent', p_idempotency_key: key, p_notes: null,
+        p_client_package_id: prm.client_package_id ?? null,
       })
       ctx.flags.booked = true
       await clearPending(ctx)
@@ -416,6 +442,12 @@ async function confirmPending(ctx: ToolCtx): Promise<Out> {
   } catch (e) {
     if (e instanceof RpcFailure) {
       await clearPending(ctx) // the proposal is stale after any rule violation: propose again
+      if (e.code === 'PACKAGE_EMPTY' || e.code === 'PACKAGE_EXPIRED' || e.code === 'PACKAGE_INVALID') {
+        return {
+          ...fail(e.code, e.detail ?? e.code),
+          next: 'O pacote não pode ser usado. Diga à cliente que o pacote não tem sessões disponíveis, proponha o agendamento pago (propose_booking sem use_package) e chame note_for_karol.',
+        }
+      }
       return fail(e.code, e.detail ?? e.code)
     }
     throw e
