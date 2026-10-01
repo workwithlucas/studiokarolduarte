@@ -615,7 +615,7 @@ begin
     v_like := '%' || replace(replace(replace(unaccent(lower(v_q)), '\', '\\'), '%', '\%'), '_', '\_') || '%';
   end if;
 
-  -- statement: every payment line (credit deposits included). sum_cents = all live lines; the UI splits cash from non-cash.
+  -- statement: every payment line (credit deposits included). sum_cents = live lines except credit_balance and adjustment (cash + barter, as before).
   if p_mode = 'statement' then
     return query
     with j as (
@@ -652,7 +652,7 @@ begin
            j.pmethod, j.ppaid, j.pamt, j.prev,
            j.vcb, j.vcp, j.vcc, j.vsc,
            count(*) over (),
-           (sum(j.pamt) filter (where j.prev is null) over ())::bigint
+           (sum(j.pamt) filter (where j.prev is null and j.pmethod not in ('credit_balance', 'adjustment')) over ())::bigint
     from j
     order by j.ppaid desc, j.pid
     limit v_lim offset v_off;
