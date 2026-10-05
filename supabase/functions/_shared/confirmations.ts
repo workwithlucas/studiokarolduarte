@@ -1,9 +1,9 @@
 // send-confirmations: tomorrow's appointments, one WhatsApp per phone, idempotent through wa_confirmations.
-import { callRpc, loadSettings, storeOutbound, unwrap, updateConversation } from './db.ts'
+import { callRpc, loadSettings, unwrap, updateConversation } from './db.ts'
+import { sendScheduled } from './outbound.ts'
 import { firstName, normalizePhone } from './phone.ts'
 import { addDays, hhmm, hhmmToMinutes, isoOf, parseInstant, spParts } from './time.ts'
 import type { Deps, Settings } from './types.ts'
-import { sendText } from './zapi.ts'
 
 export const MAX_RECIPIENTS = 40
 export const MIN_AGE_MS = 3 * 3_600_000
@@ -30,7 +30,7 @@ export interface Batch {
 
 /** Runs only when enabled, the agent is not off, and it is between confirmation_hour and 20:00 (São Paulo). */
 export function confirmationsOpen(settings: Settings, nowMs: number): boolean {
-  if (!settings.confirmation_enabled || settings.agent_mode === 'off') return false
+  if (!settings.confirmation_enabled || settings.agent_mode === 'off' || settings.agent_mode === 'shadow') return false
   const m = spParts(nowMs).minutes
   return m >= hhmmToMinutes(settings.confirmation_hour, 16 * 60) && m < CUTOFF_MINUTES
 }
@@ -121,8 +121,12 @@ export async function runConfirmations(deps: Deps, budgetMs = 110_000): Promise<
         continue
       }
       const text = confirmationText(batch)
-      const r = await sendText(deps.fetch, deps.cfg.zapi, batch.phone, text)
-      const messageId = await storeOutbound(db, convId, r.messageId, text, 'confirmation')
+      const r = await sendScheduled(deps, { conversationId: convId, phone: batch.phone, text, purpose: 'confirmation' })
+      if (!r.sent) {
+        skipped++ // the mode changed since the batch started: nothing goes out
+        continue
+      }
+      const messageId = r.messageRowId ?? null
       unwrap(
         await db.from('wa_confirmations').upsert(
           batch.items.map((x) => ({ appointment_id: x.id, message_id: messageId, sent_at: isoOf(deps.now()) })),

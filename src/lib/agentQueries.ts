@@ -3,7 +3,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { rpc } from './rpc'
 
-export type AgentMode = 'off' | 'test' | 'live'
+export type AgentMode = 'off' | 'shadow' | 'test' | 'live'
 
 export interface AgentSettings {
   agent_mode: AgentMode
@@ -34,9 +34,55 @@ export interface AgentAction {
   starts_at: string | null
 }
 
+export interface AgentHardening {
+  live_since: string | null
+  off_since: string | null
+  max_inbound_age_minutes: number
+  breaker_max_sends: number
+  breaker_window_minutes: number
+  would_quarantine_threads: number
+  /** Agent sends after off_since (from the log); only meaningful while the agent is off. */
+  sends_after_off: number
+  /** Set when the last switch to off was made by the circuit breaker. */
+  breaker_at: string | null
+}
+
+export interface AgentDraft {
+  id: string
+  at: string
+  client_name: string | null
+  phone: string | null
+  inbound: string | null
+  draft_text: string | null
+}
+
+export type UnansweredReason = 'antiga' | 'equipe respondeu' | 'antes de ativar'
+
+export interface UnansweredItem {
+  id: string
+  phone: string
+  client_name: string | null
+  inbound: string | null
+  inbound_at: string
+  reason: UnansweredReason
+  paused: boolean
+}
+
+export interface AgentModeResult {
+  mode: AgentMode
+  previous: AgentMode | null
+  changed: boolean
+  quarantined_messages: number
+  quarantined_threads: number
+  cancelled: number
+}
+
 export interface AgentOverview {
   settings: AgentSettings
+  hardening: AgentHardening
   attention: AttentionItem[]
+  drafts: AgentDraft[]
+  unanswered: UnansweredItem[]
   actions: AgentAction[]
 }
 
@@ -51,7 +97,26 @@ export function useAgentOverview() {
   })
 }
 
-export const MODE_LABEL: Record<AgentMode, string> = { off: 'Desligado', test: 'Teste', live: 'No ar' }
+export const MODE_LABEL: Record<AgentMode, string> = { off: 'Desligada', shadow: 'Sombra', test: 'Teste', live: 'No ar' }
+
+const DECISION_LABEL: Record<string, string> = {
+  replied: 'respondeu',
+  shadow_drafted: 'rascunho (não enviado)',
+  no_reply: 'não respondeu',
+  handoff: 'passou para a equipe',
+  skipped_mode: 'desligada ou fora do teste',
+  skipped_stale: 'mensagem antiga demais',
+  skipped_human: 'equipe em atendimento',
+  skipped_before_live: 'anterior a ativar',
+  skipped_answered: 'já respondida',
+  skipped_duplicate: 'duplicada',
+  cancelled_off: 'cancelada ao desligar',
+  circuit_breaker: 'disjuntor: envios demais',
+  error: 'erro',
+}
+
+export const decisionText = (action: string | null | undefined, reason?: string | null): string =>
+  action ? `${DECISION_LABEL[action] ?? action}${reason && reason !== 'reply' ? ` · ${reason}` : ''}` : ''
 
 const ACTION_LABEL: Record<string, string> = {
   book_appointment: 'Agendou',

@@ -34,6 +34,7 @@ const uuid = { type: 'string', description: 'uuid devolvido por uma ferramenta' 
 export const TOOL_DEFS: ToolDef[] = [
   { name: 'lookup_client', description: 'Busca cadastros pelo telefone desta conversa. Chame primeiro. Se houver exatamente um, ele é selecionado e o contexto vem junto.', input_schema: { type: 'object', properties: {} } },
   { name: 'choose_client', description: 'Escolhe, entre os cadastros do telefone, para quem é o atendimento (número compartilhado).', input_schema: { type: 'object', properties: { client_id: uuid }, required: ['client_id'] } },
+  { name: 'find_client_by_name', description: 'Use só quando lookup_client não achou ninguém pelo telefone e a cliente já disse nome e sobrenome. Procura pelo nome; vincula este telefone a um cadastro sem telefone, cria o cadastro se não existir, ou encaminha para a equipe quando houver dúvida.', input_schema: { type: 'object', properties: { name: { type: 'string', description: 'nome e sobrenome da cliente' } }, required: ['name'] } },
   { name: 'register_client', description: 'Cadastra uma cliente nova com o telefone desta conversa. Use quando lookup_client não achar ninguém ou for outra pessoa do mesmo número.', input_schema: { type: 'object', properties: { name: { type: 'string', description: 'nome da cliente' } }, required: ['name'] } },
   { name: 'list_services', description: 'Serviços ativos com ações (colocação, manutenção, remoção), durações, preços e adicionais.', input_schema: { type: 'object', properties: { category: { type: 'string', enum: [...CATEGORIES] } } } },
   { name: 'suggest_professionals', description: 'Profissionais que fazem o serviço, com a habitual da cliente primeiro.', input_schema: { type: 'object', properties: { service_id: uuid }, required: ['service_id'] } },
@@ -102,6 +103,9 @@ export async function safeClientContext(ctx: Pick<ToolCtx, 'deps'>, clientId: st
       needs_return: c.needs_return,
       habitual_professional: c.preferred_professional_id ? { id: c.preferred_professional_id, name: nameOf(c.preferred_professional_id) } : null,
       active_packages: c.active_packages ?? [],
+      last_completed: ((c.last_completed as Array<Record<string, any>>) ?? []).map((a) => ({
+        when: humanSlot(parseInstant(a.starts_at) ?? 0), service: a.service_name, professional: nameOf(a.professional_id),
+      })),
       next_appointments: ((c.next_appointments as Array<Record<string, any>>) ?? []).map((a) => ({
         id: a.id, when: humanSlot(parseInstant(a.starts_at) ?? 0), service: a.service_name, professional: nameOf(a.professional_id), status: a.status,
       })),
@@ -184,6 +188,7 @@ export async function executeTool(ctx: ToolCtx, name: string, input: unknown): P
       case 'lookup_client': return await lookupClient(ctx)
       case 'choose_client': return await chooseClient(ctx, args)
       case 'register_client': return await registerClient(ctx, args)
+      case 'find_client_by_name': return await findClientByName(ctx, args)
       case 'list_services': return await listServices(ctx, args)
       case 'suggest_professionals': return await suggestProfessionals(ctx, args)
       case 'get_availability': return await getAvailability(ctx, args)
@@ -212,9 +217,9 @@ async function lookupClient(ctx: ToolCtx): Promise<Out> {
   if (cands.length === 1) {
     const only = cands[0]!
     await setClient(ctx, only.id)
-    return { ok: true, candidates: cands, current_client_id: only.id, context: await safeClientContext(ctx, only.id) }
+    return { ok: true, candidates: cands, current_client_id: only.id, context: await safeClientContext(ctx, only.id), note: 'Cliente identificada pelo telefone: nunca pergunte o nome. Cite agendamentos só se o pedido dela for sobre eles.' }
   }
-  return { ok: true, candidates: cands, current_client_id: ctx.conv.client_id, note: cands.length ? 'Mais de um cadastro neste telefone: pergunte para quem é e use choose_client.' : 'Nenhum cadastro: pergunte o nome e use register_client.' }
+  return { ok: true, candidates: cands, current_client_id: ctx.conv.client_id, note: cands.length ? 'Mais de um cadastro neste telefone: pergunte para quem é e use choose_client.' : 'Nenhum cadastro com este telefone: pergunte nome e sobrenome (uma única vez) e use find_client_by_name.' }
 }
 
 async function chooseClient(ctx: ToolCtx, a: Record<string, unknown>): Promise<Out> {
@@ -238,6 +243,26 @@ async function registerClient(ctx: ToolCtx, a: Record<string, unknown>): Promise
   })
   await setClient(ctx, id)
   return { ok: true, client_id: id, name: name.value }
+}
+
+/** Identity by name: first + last name, accent/case-insensitive. The rules live in rpc_find_client_by_name. */
+async function findClientByName(ctx: ToolCtx, a: Record<string, unknown>): Promise<Out> {
+  const name = argText(a.name, 'name', 3, 80)
+  if (!name.ok) return invalid(name)
+  if (!/^[\p{L}][\p{L} '.-]*$/u.test(name.value)) return fail('INVALID_ARGUMENT', 'name inválido')
+  const res = await callRpc<{ result: string; client_id?: string; name?: string }>(ctx.deps.db, 'rpc_find_client_by_name', { p_name: name.value, p_phone: ctx.conv.phone_e164 })
+  if (res.result === 'need_full_name') return fail('NEED_FULL_NAME', 'Peça o nome e o sobrenome da cliente.')
+  if (res.result === 'handoff_multiple' || res.result === 'handoff_other_phone') {
+    const reason = res.result === 'handoff_multiple' ? 'Mais de um cadastro com este nome: confirmar quem é a cliente' : 'Já existe uma cliente com este nome e outro telefone: confirmar antes de vincular'
+    await callRpc(ctx.deps.db, 'agent_flag', { p_conversation_id: ctx.conv.id, p_reason: reason, p_handoff: true, p_handoff_hours: 12 })
+    ctx.conv.mode = 'human'
+    ctx.conv.needs_attention = true
+    ctx.flags.handoff = true
+    return { ok: true, result: 'handoff', next: 'Avise em uma frase curta que a Karol vai falar com ela.' }
+  }
+  if (!res.client_id) return fail('NOT_FOUND', 'Cadastro não encontrado.')
+  await setClient(ctx, res.client_id)
+  return { ok: true, result: res.result, client_id: res.client_id, context: await safeClientContext(ctx, res.client_id) }
 }
 
 // ---------------------------------------------------------------- catalog

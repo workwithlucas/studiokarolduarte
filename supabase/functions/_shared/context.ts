@@ -4,19 +4,42 @@ import { unwrap, type StoredMessage } from './db.ts'
 import { safeClientContext, type ToolCtx } from './tools.ts'
 import { addDays, ddmm, humanSlot, parseInstant, spParts, weekdayName, weekdayOfYmd } from './time.ts'
 
-/** Consecutive same-role messages become one turn; the first turn is always a user turn. */
+/** Label for what staff typed on the phone: the model must never repeat or contradict it. */
+export const STAFF_LABEL = '[Equipe]'
+
+/** Consecutive same-role messages become one turn; the first turn is always a user turn. Staff messages are labeled. */
+
 export function buildMessages(history: StoredMessage[]): ChatMessage[] {
   const out: ChatMessage[] = []
   for (const m of history) {
     const role: 'user' | 'assistant' = m.direction === 'in' ? 'user' : 'assistant'
-    const text = (m.body ?? '').trim() || (role === 'user' ? (m.kind === 'audio' ? '[mensagem de voz sem transcrição]' : '[mensagem sem texto]') : '')
-    if (!text) continue
+    const raw = (m.body ?? '').trim() || (role === 'user' ? (m.kind === 'audio' ? '[mensagem de voz sem transcrição]' : '[mensagem sem texto]') : '')
+    if (!raw) continue
+    const text = m.sender === 'staff' || (m.direction === 'out' && m.from_human) ? `${STAFF_LABEL} ${raw}` : raw
     const last = out[out.length - 1]
     if (last && last.role === role) last.content = `${last.content as string}\n${text}`
     else out.push({ role, content: text })
   }
   while (out.length && out[0]!.role === 'assistant') out.shift()
   return out
+}
+
+/** Professionals, working hours and services come from the database; nothing about them is written in the prompt. */
+async function catalogLines(deps: ToolCtx['deps']): Promise<string[]> {
+  const pros = unwrap<Array<{ id: string; name: string }>>(await deps.db.from('professionals').select('id,name').eq('active', true).order('name'))
+  const hours = unwrap<Array<{ professional_id: string; weekday: number; start_time: string; end_time: string }>>(
+    await deps.db.from('working_hours').select('professional_id,weekday,start_time,end_time').order('weekday').order('start_time'),
+  )
+  const svcs = unwrap<Array<{ name: string; duration_min: number }>>(await deps.db.from('services').select('name,duration_min').eq('active', true).order('name'))
+  const t = (v: string) => v.slice(0, 5)
+  const proLine = (p: { id: string; name: string }) => {
+    const hs = (hours ?? []).filter((h) => h.professional_id === p.id)
+    return `${p.name} — ${hs.length ? hs.map((h) => `${weekdayName(h.weekday)} ${t(h.start_time)}-${t(h.end_time)}`).join(', ') : 'sem horário cadastrado'}`
+  }
+  return [
+    'PROFISSIONAIS E HORÁRIOS DE TRABALHO (cadastro): ' + ((pros ?? []).length ? (pros ?? []).map(proLine).join('; ') : 'nenhuma.'),
+    'SERVIÇOS ATIVOS (nome, duração; preços só por list_services): ' + ((svcs ?? []).length ? (svcs ?? []).map((s) => `${s.name} (${s.duration_min} min)`).join('; ') : 'nenhum.'),
+  ]
 }
 
 export async function buildDynamicBlock(ctx: ToolCtx): Promise<string> {
@@ -30,6 +53,7 @@ export async function buildDynamicBlock(ctx: ToolCtx): Promise<string> {
     return `${weekdayName(weekdayOfYmd(d))} ${ddmm(d)} = ${d}`
   }).join('; ') + '.')
   lines.push(`HORÁRIO DE ATENDIMENTO PELO WHATSAPP: ${settings.agent_window_start} às ${settings.agent_window_end}.`)
+  lines.push(...(await catalogLines(deps)))
 
   const known = conv.known_client_ids.length
     ? unwrap<Array<{ id: string; name: string }>>(await deps.db.from('clients').select('id,name').in('id', conv.known_client_ids))
@@ -63,8 +87,10 @@ export async function buildDynamicBlock(ctx: ToolCtx): Promise<string> {
 
   if (conv.client_id) {
     const c = await safeClientContext(ctx, conv.client_id)
-    if (c) lines.push(`CONTEXTO DA CLIENTE ATUAL: ${JSON.stringify(c)}`)
+    if (c) lines.push(`CONTEXTO DA CLIENTE ATUAL (identificada pelo telefone; nunca pergunte o nome dela): ${JSON.stringify(c)}`)
   }
+  lines.push('Agendamentos e histórico da cliente são só para consulta: cite um agendamento apenas se o pedido da cliente for sobre ele.')
+  lines.push('Mensagens marcadas com [Equipe] foram escritas pela equipe no celular do studio.')
   if (conv.audio_failures >= 1) {
     lines.push('AVISO: a última mensagem de voz não pôde ser entendida. Peça de forma simpática que a cliente repita, sem citar áudio nem limitações.')
   }

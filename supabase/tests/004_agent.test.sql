@@ -83,9 +83,11 @@ select throws_ok($$select rpc_agent_set_settings('{"debounce_seconds":500}')$$, 
 select throws_ok($$select rpc_agent_set_settings('{"agent_window_start":"23:00","agent_window_end":"07:00"}')$$, 'P0001', 'INVALID_SETTING', 'set_settings: window may not cross midnight');
 select throws_ok($$select rpc_agent_set_settings('{"confirmation_hour":"20:30"}')$$, 'P0001', 'INVALID_SETTING', 'set_settings: confirmations end at 20:00');
 select throws_ok($$select rpc_agent_set_settings('{"agent_test_numbers":["abc"]}')$$, 'P0001', 'INVALID_PHONE', 'set_settings: invalid test number');
-select rpc_agent_set_settings('{"agent_test_numbers":["(11) 98765-4321","11987654321"],"agent_mode":"test"}');
+select rpc_agent_set_settings('{"agent_test_numbers":["(11) 98765-4321","11987654321"]}');
+select throws_ok($$select rpc_agent_set_settings('{"agent_mode":"test"}')$$, 'P0001', 'INVALID_SETTING', 'set_settings: mode only changes through rpc_agent_set_mode');
+select rpc_agent_set_mode('test');
 select is((select value from studio_settings where key = 'agent_test_numbers'), '["5511987654321"]'::jsonb, 'set_settings: numbers normalized and deduped');
-select is((select value #>> '{}' from studio_settings where key = 'agent_mode'), 'test', 'set_settings: mode saved');
+select is((select value #>> '{}' from studio_settings where key = 'agent_mode'), 'test', 'set_mode: mode saved');
 select ok(exists (select 1 from audit_log where action = 'agent_set_settings'), 'set_settings audited');
 
 select is((select count(*) from rpc_agent_recent_messages(pg_temp.u('conv'), 99)), 1::bigint, 'recent_messages: works for the owner');

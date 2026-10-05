@@ -1,9 +1,9 @@
 // notify-reschedule: fixed system text after a time adjustment. No AI call; the text is built from stored data.
-import { callRpc, loadSettings, modeAllows, storeOutbound, updateConversation } from './db.ts'
+import { callRpc, loadSettings, modeAllows, updateConversation } from './db.ts'
+import { sendScheduled } from './outbound.ts'
 import { firstName, normalizePhone } from './phone.ts'
 import { ddmm, hhmm, isoOf, parseInstant, spParts } from './time.ts'
 import type { Deps } from './types.ts'
-import { sendText } from './zapi.ts'
 
 export interface RescheduleNotice {
   appointment_id: string
@@ -37,8 +37,8 @@ export async function sendRescheduleNotice(deps: Deps, requestId: string): Promi
   // claim first: a double click or a retry never sends twice
   if (!(await callRpc<boolean>(db, 'agent_mark_reschedule_notified', { p_request_id: requestId }))) return 'not_pending'
   const convId = await callRpc<string>(db, 'agent_touch_conversation', { p_phone: phone, p_client_ids: [n.client_id] })
-  const r = await sendText(deps.fetch, deps.cfg.zapi, phone, text)
-  await storeOutbound(db, convId, r.messageId, text, 'reply')
+  const r = await sendScheduled(deps, { conversationId: convId, phone, text, purpose: 'reply' })
+  if (!r.sent) return 'mode_off'
   await updateConversation(db, convId, { last_outbound_at: isoOf(deps.now()) })
   return 'sent'
 }

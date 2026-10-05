@@ -2,12 +2,14 @@
 // Z-API/Groq/legacy through an injected fetch. Needs: supabase start. Prints failures and a one-line summary only.
 import { createClient } from '@supabase/supabase-js'
 import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import pg from 'pg'
 import { runAgent, HANDOFF_TEXT } from '../supabase/functions/_shared/agent.ts'
 import { runConfirmations } from '../supabase/functions/_shared/confirmations.ts'
 import { executeTool, type ToolCtx } from '../supabase/functions/_shared/tools.ts'
 import { runSweep } from '../supabase/functions/_shared/sweep.ts'
 import { addDays, parseInstant, spParts } from '../supabase/functions/_shared/time.ts'
+import { normalizePhone, phoneKey } from '../supabase/functions/_shared/phone.ts'
 import { getConversation, loadSettings } from '../supabase/functions/_shared/db.ts'
 import { handleReceived } from '../supabase/functions/_shared/webhook.ts'
 import type { Db, Deps } from '../supabase/functions/_shared/types.ts'
@@ -165,6 +167,10 @@ async function setSettings(patch: Record<string, unknown>) {
   for (const [k, v] of Object.entries({ ...base, ...patch })) {
     await q('insert into studio_settings (key, value) values ($1, $2::jsonb) on conflict (key) do update set value = excluded.value', [k, JSON.stringify(v)])
   }
+  // The harness writes the mode directly (setup only): keep live_since / off_since as the mode RPC would.
+  const mode = String({ ...base, ...patch }.agent_mode)
+  if (mode === 'off') await q('update agent_settings set off_since = now()')
+  else await q("update agent_settings set live_since = '2000-01-01', off_since = null")
 }
 
 async function reset() {
@@ -173,9 +179,12 @@ async function reset() {
   await q("delete from ledger_entries where client_id in (select id from clients where name like 'ZZA %')")
   await q("delete from appointment_addons where appointment_id in (select a.id from appointments a join clients c on c.id = a.client_id where c.name like 'ZZA %')")
   await q("delete from appointments where client_id in (select id from clients where name like 'ZZA %')")
+  await q("delete from agent_decisions where conversation_id in (select id from wa_conversations where phone_e164 like '5511999000%')")
+  await q('delete from agent_decisions where conversation_id is null or conversation_id not in (select id from wa_conversations)')
   await q("delete from wa_conversations where phone_e164 like '5511999000%'")
   await q("delete from client_packages where client_id in (select id from clients where name like 'ZZA %')")
   await q("delete from clients where name like 'ZZA %'")
+  await q('update agent_settings set breaker_max_sends = 6, breaker_window_minutes = 5, max_inbound_age_minutes = 10')
   await setSettings({})
 }
 
@@ -458,16 +467,20 @@ sc('9 send-confirmations, then "sim" confirms', async () => {
 
 sc('10 outside the window: away message once per 12h, no LLM', async () => {
   const phone = P(12)
-  await setSettings({ agent_window_start: '12:00', agent_window_end: '13:00' })
-  const at = (hhmm: string) => parseInstant(`${today()}T${hhmm}:00`)!
-  const r1 = await say(phone, 'oi', mkDeps({ now: () => at('03:00') }))
+  // real clock (messages older than max_inbound_age are never answered): pick a window that excludes "now"
+  const nowMin = spParts(Date.now()).minutes
+  await setSettings(nowMin < 12 * 60 ? { agent_window_start: '13:00', agent_window_end: '14:00' } : { agent_window_start: '02:00', agent_window_end: '03:00' })
+  const r1 = await say(phone, 'oi')
   check('away sent', r1.outcome?.status === 'away' && sentTo(phone).length === 1)
-  const r2 = await say(phone, 'alguém aí?', mkDeps({ now: () => at('08:00') }))
+  const dec = await q<any>("select action, reason from agent_decisions where conversation_id = $1", [(await convOf(phone)).id])
+  check('away is the final decision for that message', dec.length === 1 && dec[0].action === 'replied' && dec[0].reason === 'away', JSON.stringify(dec))
+  const r2 = await say(phone, 'alguém aí?')
   check('not repeated within 12h', r2.outcome?.status === 'skipped' && sentTo(phone).length === 1, String(r2.outcome?.status))
-  const r3 = await say(phone, 'oi??', mkDeps({ now: () => at('16:00') }))
+  await q("update wa_conversations set away_sent_at = now() - interval '13 hours' where phone_e164 = $1", [phone])
+  const r3 = await say(phone, 'oi??')
   check('sent again after 12h', r3.outcome?.status === 'away' && sentTo(phone).length === 2, String(r3.outcome?.status))
   check('no LLM call', world.llmCalls === 0)
-  check('messages left pending', (await convOf(phone)).pending_since !== null)
+  check('no job stays queued: the message is decided', (await convOf(phone)).pending_since === null)
   check('away message text is the configured one', sentTo(phone)[0]!.message.startsWith('Oi! Recebi sua mensagem'))
 })
 
@@ -480,7 +493,7 @@ sc('11 fromMe message pauses the agent', async () => {
   const echo = await handleReceived(deps, zapiText(phone, 'Oi! Como posso ajudar?', { fromMe: true, messageId: ourId }), async () => {})
   check('an id we sent is ignored', echo.action === 'ignored' && (await convOf(phone)).mode === 'agent', echo.action)
   const viaApi = await handleReceived(deps, zapiText(phone, 'x', { fromMe: true, fromApi: true, messageId: 'API-1' }), async () => {})
-  check('fromApi is ignored', viaApi.action === 'ignored')
+  check('an unknown fromApi id is another sender: stored as staff, never ignored', viaApi.action === 'human' && (await q("select 1 from wa_messages where external_id='API-1' and sender='staff'")).length === 1, viaApi.action)
   const human = await handleReceived(deps, zapiText(phone, 'Oi, aqui é a Karol!', { fromMe: true, messageId: 'HUMAN-1' }), async () => {})
   const c = await convOf(phone)
   const hours = (new Date(c.human_until).getTime() - Date.now()) / 3600_000
@@ -607,7 +620,7 @@ sc('17 tool loop limit and 3 failed runs', async () => {
   await q('update wa_conversations set failed_runs = 3, last_inbound_at = now() - interval \'5 minutes\' where phone_e164 = $1', [phone])
   const sw = await runSweep(mkDeps(), async (id) => { throw new Error(`sweep must stop retrying ${id}`) })
   const c = await convOf(phone)
-  check('sweep flags "Erro do agente" and stops retrying', sw.flagged >= 1 && c.needs_attention && c.attention_reason === 'Erro do agente' && sw.invoked === 0, JSON.stringify(sw))
+  check('sweep flags "Erro do agente" and stops retrying', sw.flagged >= 1 && c.needs_attention && String(c.attention_reason).startsWith('Erro do agente: tool loop exceeded') && sw.invoked === 0, JSON.stringify(sw))
 })
 
 sc('18 owner RPCs: only the owner, settings validated', async () => {
@@ -737,11 +750,319 @@ sc('21 a package for another service is ignored', async () => {
   check('paid booking, other package untouched', a.length === 1 && a[0].client_package_id === null && Number(pk) === 4 && l[0]?.amount_cents === 8000, JSON.stringify([pk, l]))
 })
 
+// ================================================================ Task 12: agent hardening (incident 05/10/2026)
+const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const setMode = async (m: string) => (await q<any>('select rpc_agent_set_mode($1) as r', [m]))[0].r
+const decisionsOf = (phone: string) =>
+  q<any>('select d.* from agent_decisions d join wa_conversations c on c.id = d.conversation_id where c.phone_e164 = $1 order by d.decided_at', [phone])
+const fromMe = (deps: Deps, phone: string, body: string, id: string, over: Record<string, unknown> = {}) =>
+  handleReceived(deps, zapiText(phone, body, { fromMe: true, messageId: id, ...over }), async () => {})
+const flat = (s: string) => s.split(/\s+/).join(' ')
+const reasons = (d: any[]) => JSON.stringify(d.map((x) => [x.action, x.reason]))
+
+sc('22 phone_key: shared vectors agree between SQL and TypeScript', async () => {
+  const fx = JSON.parse(readFileSync('tests/fixtures/phone-keys.json', 'utf8'))
+  for (const v of fx.same as string[]) {
+    const sqlKey = (await q<any>('select phone_key($1) as k', [v]))[0].k
+    check(`same key for ${v}`, sqlKey === fx.sameKey && phoneKey(v) === fx.sameKey, `${sqlKey}/${phoneKey(v)}`)
+  }
+  for (const v of fx.different as Array<{ input: string; key: string }>) {
+    const sqlKey = (await q<any>('select phone_key($1) as k', [v.input]))[0].k
+    check(`own key for ${v.input}`, sqlKey === v.key && phoneKey(v.input) === v.key && v.key !== fx.sameKey, `${sqlKey}/${phoneKey(v.input)}`)
+  }
+  for (const v of fx.invalid as Array<string | null>) {
+    const sqlKey = (await q<any>('select phone_key($1) as k', [v]))[0].k
+    check(`invalid -> null (${String(v)})`, sqlKey === null && phoneKey(v) === null)
+  }
+})
+
+sc('23 replay: Saturday inbound, mode switched to live on Monday -> quarantined, no reply', async () => {
+  const phone = P(23)
+  await setSettings({ agent_mode: 'off' })
+  const saturday = Date.now() - 2 * 86_400_000
+  const r = await say(phone, 'oi, tudo bem?', mkDeps(), { momment: saturday })
+  check('stored while off, nothing runs', r.res.action === 'stopped' && world.llmCalls === 0)
+  const stored = (await q<any>('select sent_at from wa_messages m join wa_conversations c on c.id = m.conversation_id where c.phone_e164 = $1', [phone]))[0]
+  check('inbound keeps the provider time, not the arrival time', Math.abs(new Date(stored.sent_at).getTime() - saturday) < 2000, String(stored.sent_at))
+  const sw0 = await runSweep(mkDeps(), async () => { throw new Error('sweep must not invoke while off') })
+  check('sweep does nothing while off', sw0.invoked === 0)
+  const sw = await setMode('live')
+  check('mode RPC reports the quarantine', sw.quarantined_messages >= 1 && sw.quarantined_threads >= 1, JSON.stringify(sw))
+  const inb = (await q<any>('select state from v_agent_inbound v join wa_conversations c on c.id = v.conversation_id where c.phone_e164 = $1', [phone]))[0]
+  check('derived state is quarantined (nothing stored as status)', inb.state === 'quarantined', inb.state)
+  await q("update wa_conversations set pending_since = now(), last_inbound_at = now() - interval '5 minutes' where phone_e164 = $1", [phone])
+  await runSweep(mkDeps(), async (id) => { await runAgent(mkDeps(), id) })
+  const d = await decisionsOf(phone)
+  check('no reply, no LLM call', sentTo(phone).length === 0 && world.llmCalls === 0)
+  check('decision is skipped_before_live (quarantined)', d.length === 1 && d[0].action === 'skipped_before_live' && d[0].reason === 'quarantined', reasons(d))
+  const direct = await runAgent(mkDeps(), (await convOf(phone)).id)
+  check('a direct run is a no-op too', direct.status === 'skipped' && sentTo(phone).length === 0)
+})
+
+sc('24 staff answered from the phone while mode was off, then live -> skipped_answered', async () => {
+  const phone = P(24)
+  await setSettings({ agent_mode: 'off' })
+  await say(phone, 'oi, tem horário?', mkDeps())
+  const staff = await fromMe(mkDeps(), phone, 'Oi! Tenho sim, amanhã às 10h.', 'STAFF-24')
+  const c0 = await convOf(phone)
+  check('fromMe is stored even while off, as staff, and pauses the thread', staff.action === 'human' && c0.mode === 'human' && (await q("select 1 from wa_messages where external_id='STAFF-24' and sender='staff' and direction='out'")).length === 1)
+  await setMode('live')
+  await q("update wa_conversations set mode = 'agent', human_until = null where phone_e164 = $1", [phone]) // even if the pause were lifted
+  const out = await runAgent(mkDeps(), c0.id)
+  const d = await decisionsOf(phone)
+  check('not answered again', out.status === 'skipped' && sentTo(phone).length === 0 && world.llmCalls === 0)
+  check('decision is skipped_answered', d.length === 1 && d[0].action === 'skipped_answered', reasons(d))
+})
+
+sc('25 staff replies while the agent is generating -> send aborted', async () => {
+  const phone = P(25)
+  world.llmDelayMs = 400
+  world.script = [() => [text('Oi! Como posso ajudar?')]]
+  const deps = mkDeps()
+  const [r] = await Promise.all([say(phone, 'oi', deps), (async () => { await sleepMs(120); await fromMe(deps, phone, 'Oi, aqui é a Karol!', 'STAFF-25') })()])
+  check('nothing was sent', sentTo(phone).length === 0 && r.outcome?.status === 'skipped', String(r.outcome?.status))
+  const d = await decisionsOf(phone)
+  check('decision is skipped_answered', d.length === 1 && d[0].action === 'skipped_answered', reasons(d))
+})
+
+sc('26 mode switched off between decision and send -> no send; queued job -> cancelled_off', async () => {
+  const phone = P(26)
+  world.llmDelayMs = 400
+  world.script = [() => [text('Oi! Como posso ajudar?')]]
+  const deps = mkDeps()
+  await Promise.all([say(phone, 'oi', deps), (async () => { await sleepMs(120); await setMode('off') })()])
+  const d = await decisionsOf(phone)
+  check('no Z-API call after the switch', sentTo(phone).length === 0)
+  check('outcome stored', d.length === 1 && ['cancelled_off', 'skipped_mode'].includes(d[0].action), reasons(d))
+  check('off_since set and the mode is off', (await q<any>('select off_since from agent_settings'))[0].off_since !== null && (await loadSettings(db)).agent_mode === 'off')
+
+  await setSettings({ agent_mode: 'live' })
+  const queued = P(27)
+  await q('select * from agent_ingest_inbound($1,$2,$3,$4)', [queued, 'Q-1', 'text', 'oi'])
+  const res = await setMode('off')
+  check('queued job cancelled', res.cancelled === 1, JSON.stringify(res))
+  const d2 = await decisionsOf(queued)
+  check('decision cancelled_off, nothing queued, no send', d2.length === 1 && d2[0].action === 'cancelled_off' && (await convOf(queued)).pending_since === null && sentTo(queued).length === 0, reasons(d2))
+})
+
+sc('27 retries: old messages never retried, max 2 retries, real error stored', async () => {
+  const phone = P(28)
+  world.script = []
+  const first = await say(phone, 'oi')
+  check('first run fails and nothing goes to the client', first.outcome?.status === 'failed' && sentTo(phone).length === 0)
+  let d = await decisionsOf(phone)
+  check('error decision with the real error text', d.length === 1 && d[0].action === 'error' && /script exhausted|500|anthropic/i.test(String(d[0].error_text)), JSON.stringify(d.map((x) => [x.action, x.error_text])))
+  const cid = (await convOf(phone)).id
+  await runAgent(mkDeps(), cid)
+  await runAgent(mkDeps(), cid)
+  const calls = world.llmCalls
+  const fourth = await runAgent(mkDeps(), cid)
+  d = await decisionsOf(phone)
+  check('exactly 2 retries (3 attempts); the 4th run does nothing', d[0].attempts === 3 && fourth.status === 'skipped' && world.llmCalls === calls, `attempts=${d[0].attempts} ${fourth.status}`)
+
+  const old = P(29)
+  world.script = []
+  await say(old, 'oi')
+  await q("update wa_messages set sent_at = now() - interval '30 minutes' where conversation_id = (select id from wa_conversations where phone_e164 = $1) and direction = 'in'", [old])
+  world.script = [() => [text('não pode sair')]]
+  const calls2 = world.llmCalls
+  const retry = await runAgent(mkDeps(), (await convOf(old)).id)
+  const d3 = await decisionsOf(old)
+  check('retry of a message older than max age is never sent', retry.status === 'skipped' && sentTo(old).length === 0 && world.llmCalls === calls2)
+  check('decision skipped_stale and the earlier error_text is kept', d3[0].action === 'skipped_stale' && !!d3[0].error_text, JSON.stringify(d3.map((x) => [x.action, x.error_text])))
+})
+
+sc('28 circuit breaker: sends above the limit within the window turn the agent off', async () => {
+  await q('update agent_settings set breaker_max_sends = 2, breaker_window_minutes = 5')
+  const ph = [P(30), P(31), P(32)]
+  for (const p of ph) {
+    world.script = [() => [text('Oi! Como posso ajudar?')]]
+    await say(p, 'oi')
+  }
+  check('two replies went out, the third did not', sentTo(ph[0]!).length === 1 && sentTo(ph[1]!).length === 1 && sentTo(ph[2]!).length === 0)
+  check('mode is off now', (await loadSettings(db)).agent_mode === 'off')
+  const d = await decisionsOf(ph[2]!)
+  check('decision circuit_breaker', d.length === 1 && d[0].action === 'circuit_breaker', reasons(d))
+  const ov = (await q<any>('select rpc_agent_overview() as o'))[0].o
+  check('panel gets the breaker banner data', !!ov.hardening.breaker_at && Number(ov.hardening.sends_after_off) === 0, JSON.stringify(ov.hardening))
+})
+
+sc('29 staff-booked client stored without the 9th digit: known by phone_key, name never asked', async () => {
+  const phone = '5511999000031' // 55 + DDD + 9 + 8 digits
+  const cid = await newClient('ZZA Helena Staff', '11 99000031') // stored as 551199000031 (no 9th digit)
+  const [s1] = await slots(maraId)
+  await bookStaff(cid, maraId, s1!)
+  const same = (await q<any>('select c.phone_e164, c.phone_key = phone_key($2) as ok from clients c where c.id = $1', [cid, phone]))[0]
+  check('raw numbers differ, keys are equal', same.phone_e164 !== phone && same.ok === true, JSON.stringify(same))
+  world.script = [() => [tu('lookup_client')], (c) => {
+    const l = c.last('lookup_client')
+    check('exactly one candidate: the staff-booked client', l.candidates.length === 1 && l.candidates[0].id === cid, JSON.stringify(l))
+    check('the appointment booked by staff is in the context', JSON.stringify(l.context.next_appointments).includes('ZZA Manicure'), JSON.stringify(l.context))
+    return [text('Oi, Helena! Como posso ajudar?')]
+  }]
+  const r = await say(phone, 'oi')
+  check('replied', r.outcome?.status === 'sent', String(r.outcome?.status))
+  check('conversation is linked to the existing client; no duplicate client', (await convOf(phone)).client_id === cid && (await q("select 1 from clients where name like 'ZZA Helena%'")).length === 1)
+  check('the name was never asked for (no name tool used)', !JSON.stringify(world.requests).includes('find_client_by_name"') || JSON.stringify(world.requests).includes('"name":"lookup_client"'))
+  check('no register_client / find_client_by_name call', !world.requests.some((rq) => JSON.stringify(rq.messages).includes('"name":"find_client_by_name"') || JSON.stringify(rq.messages).includes('"name":"register_client"')))
+  await q('delete from wa_conversations where phone_e164 = $1', [phone])
+})
+
+sc('30 "oi" from a client with an appointment: no menu, appointment not volunteered', async () => {
+  const phone = P(33)
+  const cid = await newClient('ZZA Iara Agenda', phone)
+  const [s1] = await slots(maraId)
+  await bookStaff(cid, maraId, s1!)
+  world.script = [() => [tu('lookup_client')], () => [text('Oi, Iara! Como posso ajudar?')]]
+  const r = await say(phone, 'oi')
+  const sys = JSON.stringify(world.requests[0].system)
+  check('replied with a short greeting', r.outcome?.status === 'sent' && sentTo(phone).length === 1 && !/remarcar|novo servi|agendamento/i.test(sentTo(phone)[0]!.message))
+  check('system prompt forbids unrequested options and volunteering appointments', sys.includes('Nunca ofereça remarcar') && sys.includes('Só mencione um agendamento existente'))
+  check('context tells the model to cite appointments only when asked and labels staff', sys.includes('cite um agendamento apenas se o pedido') && sys.includes('[Equipe]'))
+  check('services, durations, professionals, hours come from the database', sys.includes('PROFISSIONAIS E HORÁRIOS') && sys.includes('ZZA Manicure (60 min)') && sys.includes('Mara —'))
+})
+
+sc('31 identity by name: no phone -> linked; other phone -> handoff; several -> handoff; none -> created', async () => {
+  const p1 = P(34)
+  const noPhone = (await q<any>("select rpc_upsert_client('ZZA Graziela Matteussi', null, null, null, null) as id"))[0].id
+  world.script = [() => [tu('lookup_client')], () => [tu('find_client_by_name', { name: 'ZZA Graziéla MATTEUSSI' })], () => [text('Oi, Graziela! Como posso ajudar?')]]
+  const r1 = await say(p1, 'oi, sou a Graziela')
+  const c1 = (await q<any>('select phone_e164, phone_key from clients where id = $1', [noPhone]))[0]
+  check('phone linked to the existing client (accent/case-insensitive)', r1.outcome?.status === 'sent' && c1.phone_e164 === p1 && c1.phone_key === phoneKey(p1), JSON.stringify([c1, r1.outcome, world.requests.at(-1)?.messages.at(-1)]))
+  check('no duplicate client, conversation linked, link audited', (await q("select 1 from clients where name like 'ZZA Graziela%'")).length === 1 && (await convOf(p1)).client_id === noPhone && (await q("select 1 from audit_log where action = 'link_client_phone' and entity_id = $1", [noPhone])).length === 1)
+
+  const p2 = P(35)
+  const other = await newClient('ZZA Mayara Fernandes', P(36))
+  world.script = [() => [tu('lookup_client')], () => [tu('find_client_by_name', { name: 'ZZA Mayara Fernandes' })], () => [text('Vou pedir para a Karol falar com você.')]]
+  const r2 = await say(p2, 'oi, sou a Mayara')
+  const c2 = await convOf(p2)
+  check('different phone -> handoff; no silent link; no duplicate', c2.mode === 'human' && c2.needs_attention && (await q<any>('select phone_e164 from clients where id=$1', [other]))[0].phone_e164 === normalizePhone(P(36)) && (await q("select 1 from clients where name like 'ZZA Mayara%'")).length === 1 && r2.outcome?.status === 'sent', String(r2.outcome?.status))
+
+  const p3 = P(37)
+  await newClient('ZZA Lizandra Souza', P(38))
+  await newClient('ZZA Lizandra Souza', P(39))
+  world.script = [() => [tu('lookup_client')], () => [tu('find_client_by_name', { name: 'ZZA Lizandra Souza' })], () => [text('Vou pedir para a Karol falar com você.')]]
+  await say(p3, 'oi')
+  check('several matches -> handoff', (await convOf(p3)).mode === 'human' && (await q("select 1 from clients where name like 'ZZA Lizandra%'")).length === 2)
+
+  const p4 = P(40)
+  world.script = [() => [tu('lookup_client')], () => [tu('find_client_by_name', { name: 'ZZA Rafaela Mafezzoli' })], () => [text('Oi, Rafaela!')]]
+  await say(p4, 'oi')
+  const made = await q<any>("select id, phone_key from clients where name like 'ZZA Rafaela%'")
+  check('no match -> client created with phone_key, once', made.length === 1 && made[0].phone_key === phoneKey(p4), JSON.stringify(made))
+})
+
+sc('32 shadow mode: draft stored, zero Z-API calls', async () => {
+  const phone = P(41)
+  await setSettings({ agent_mode: 'shadow' })
+  world.script = [() => [text('Oi! Como posso ajudar?')]]
+  const r = await say(phone, 'oi')
+  const d = await decisionsOf(phone)
+  check('LLM ran, nothing sent', r.outcome?.status === 'shadow' && world.llmCalls === 1 && world.sends.length === 0)
+  check('draft stored in the decision', d.length === 1 && d[0].action === 'shadow_drafted' && flat(d[0].draft_text) === 'Oi! Como posso ajudar?', JSON.stringify(d.map((x) => [x.action, x.draft_text])))
+  const ov = (await q<any>('select rpc_agent_overview() as o'))[0].o
+  check('panel lists the draft', ov.drafts.length >= 1 && flat(ov.drafts[0].draft_text) === 'Oi! Como posso ajudar?')
+  const out = await q<any>("select 1 from wa_messages m join wa_conversations c on c.id = m.conversation_id where c.phone_e164 = $1 and direction = 'out'", [phone])
+  check('no outbound message row', out.length === 0)
+})
+
+sc('33 duplicate webhook delivery -> one decision, one reply', async () => {
+  const phone = P(42)
+  world.script = [() => [text('Oi! Como posso ajudar?')]]
+  const deps = mkDeps()
+  const raw = zapiText(phone, 'oi', { messageId: 'DUP-1' })
+  const run = async (cid: string) => { await runAgent(deps, cid) }
+  const a = await handleReceived(deps, raw, run)
+  const b = await handleReceived(deps, raw, run)
+  check('second delivery is a duplicate', a.action === 'run' && b.action === 'duplicate', `${a.action}/${b.action}`)
+  const d = await decisionsOf(phone)
+  check('one decision, one send', d.length === 1 && sentTo(phone).length === 1)
+})
+
+sc('34 agent context has no finance values', async () => {
+  const phone = P(43)
+  const cid = await newClient('ZZA Joana Caixa', phone)
+  const [s1] = await slots(maraId)
+  await bookStaff(cid, maraId, s1!)
+  world.script = [() => [tu('lookup_client')], () => [text('Oi, Joana!')]]
+  await say(phone, 'oi')
+  const sys = JSON.stringify(world.requests[0].system)
+  const money = /total_spent|spent|price_cents|amount_cents|saldo|debt|credit|valor|R\$|cash_price|commission/i
+  const ctxPart = sys.slice(sys.indexOf('CONTEXTO DA CLIENTE'))
+  const toolOut = JSON.stringify(world.requests[1].messages.filter((m: any) => Array.isArray(m.content) && m.content.some((b: any) => b.type === 'tool_result')))
+  check('client context block carries no money', ctxPart.length > 0 && !money.test(ctxPart), ctxPart.slice(0, 200))
+  check('lookup_client result carries no money', toolOut.length > 2 && !money.test(toolOut), toolOut.slice(0, 300))
+})
+
+sc('35 per-thread pause / return, and the mode RPC is owner-only', async () => {
+  const phone = P(44)
+  const ing = await q<any>('select * from agent_ingest_inbound($1,$2,$3,$4)', [phone, 'PAUSE-1', 'text', 'oi'])
+  const cid = ing[0].conversation_id as string
+  await q('select rpc_agent_pause_conversation($1)', [cid])
+  const r1 = await runAgent(mkDeps(), cid)
+  const d1 = await decisionsOf(phone)
+  check('paused thread: skipped_human, no LLM, no send', r1.status === 'skipped' && d1[0]?.action === 'skipped_human' && d1[0]?.reason === 'thread_paused' && world.llmCalls === 0 && sentTo(phone).length === 0, reasons(d1))
+  await q('select rpc_agent_return_conversation($1)', [cid])
+  const ing2 = await q<any>('select * from agent_ingest_inbound($1,$2,$3,$4)', [phone, 'PAUSE-2', 'text', 'oi de novo'])
+  world.script = [() => [text('Oi! Como posso ajudar?')]]
+  const r2 = await runAgent(mkDeps(), ing2[0].conversation_id)
+  check('returned thread answers the latest inbound', r2.status === 'sent' && sentTo(phone).length === 1, String(r2.status))
+  const { error } = await client.rpc('rpc_agent_set_mode', { p_mode: 'live' })
+  check('service role may not turn the agent on', error?.message === 'FORBIDDEN', error?.message)
+  const { error: e2 } = await client.rpc('rpc_agent_set_mode', { p_mode: 'banana' })
+  check('invalid mode refused', e2?.message === 'INVALID_SETTING', e2?.message)
+})
+
+sc('36 invariants I21 / I22 detect violations', async () => {
+  const phone = P(45)
+  const ing = await q<any>('select * from agent_ingest_inbound($1,$2,$3,$4)', [phone, 'INV-1', 'text', 'oi'])
+  const cid = ing[0].conversation_id as string
+  const i21 = async () => (await q<any>("select 1 from check_invariants() where code = 'I21'")).length
+  await q("insert into agent_decisions (message_id, conversation_id, inbound_at, decided_at, action, reason, live_since, max_age_minutes) values ('INV-1', $1, now() - interval '1 hour', now(), 'replied', 'reply', now() - interval '2 hours', 10)", [cid])
+  check('I21: reply to a message older than the max age is reported', (await i21()) === 1)
+  await q("delete from agent_decisions where message_id = 'INV-1'")
+  await q("insert into agent_decisions (message_id, conversation_id, inbound_at, decided_at, action, reason, live_since, max_age_minutes) values ('INV-1', $1, now() - interval '1 minute', now(), 'replied', 'reply', now() - interval '2 hours', 10)", [cid])
+  check('I21 clean for a valid reply', (await i21()) === 0)
+  await q("insert into wa_messages (conversation_id, direction, external_id, kind, body, from_human, sender, sent_at) values ($1, 'out', 'INV-STAFF', 'text', 'x', true, 'staff', now() - interval '30 seconds')", [cid])
+  check('I21: staff message between inbound and reply is reported', (await i21()) === 1)
+  await q("delete from wa_messages where external_id = 'INV-STAFF'")
+  await q("update agent_decisions set live_since = now() where message_id = 'INV-1'")
+  check('I21: reply to a message from before going live is reported', (await i21()) === 1)
+  await q("delete from agent_decisions where message_id = 'INV-1'")
+
+  await setSettings({ agent_mode: 'off' })
+  await q("update agent_settings set off_since = now() - interval '1 minute'")
+  await q("insert into wa_messages (conversation_id, direction, external_id, kind, body, sender, sent_at) values ($1, 'out', 'INV-AGENT', 'text', 'x', 'agent', now())", [cid])
+  const i22 = async () => (await q<any>("select 1 from check_invariants() where code = 'I22'")).length
+  check('I22: agent message after off_since while off is reported', (await i22()) === 1)
+  await q("delete from wa_messages where external_id = 'INV-AGENT'")
+  check('I22 clean', (await i22()) === 0)
+})
+
+sc('37 scheduled sends re-read the mode: off and shadow never send, test only to allow-listed', async () => {
+  const phone = P(46)
+  const cid = await newClient('ZZA Kelly Aviso', phone)
+  const { sendScheduled } = await import('../supabase/functions/_shared/outbound.ts')
+  const convId = (await q<any>('select agent_touch_conversation($1, $2) as id', [phone, [cid]]))[0].id
+  for (const mode of ['off', 'shadow']) {
+    await setSettings({ agent_mode: mode })
+    const r = await sendScheduled(mkDeps(), { conversationId: convId, phone, text: 'Lembrete', purpose: 'confirmation' })
+    check(`${mode}: no send`, r.sent === false && world.sends.length === 0, JSON.stringify(r))
+  }
+  await setSettings({ agent_mode: 'test', agent_test_numbers: [P(99)] })
+  check('test, not listed: no send', (await sendScheduled(mkDeps(), { conversationId: convId, phone, text: 'Lembrete', purpose: 'confirmation' })).sent === false && world.sends.length === 0)
+  await setSettings({ agent_mode: 'live' })
+  const ok = await sendScheduled(mkDeps(), { conversationId: convId, phone, text: 'Lembrete', purpose: 'confirmation' })
+  check('live: sent and stored as an agent message', ok.sent === true && world.sends.length === 1 && (await q("select 1 from wa_messages where body = 'Lembrete' and sender = 'agent'")).length === 1)
+})
+
 // ---------------------------------------------------------------- run
 async function main() {
   await pgc.connect()
   await ensureFixtures()
+  const only = process.env.ONLY?.split(',')
   for (const [name, fn] of scenarios) {
+    if (only && !only.some((p) => name.startsWith(p + ' '))) continue
     scenario = name
     try {
       await reset()

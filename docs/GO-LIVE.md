@@ -23,8 +23,9 @@ Regras deste roteiro:
 10. Conta da cliente, Tarefa 9: backup, depois `supabase db push` (passo 19c)
 11. Ajuste de horário, Tarefa 10: backup, depois `supabase db push` e deploy de `notify-reschedule` (passo 19d)
 12. Financeiro da profissional, Tarefa 11: backup, depois `supabase db push` (passo 19e)
-13. Agente em modo *Teste* (passo 20)
-14. Agente em modo *No ar* (passo 21)
+13. Endurecimento do agente, Tarefa 12 (incidente de 05/10): backup, `supabase db push`, deploy de todas as funções do agente (passo 19f). **O agente fica *Desligada* até as conferências do 19f passarem.**
+14. Agente em modo *Sombra*, depois *Teste* (passo 20)
+15. Agente em modo *No ar* (passo 21)
 
 Os demais passos (contas, Vault do cron, hospedagem do app, webhook da Z-API) entram no meio dessa ordem, na numeração abaixo. O app precisa estar publicado (passos 14 e 15) antes das importações, porque elas são feitas por ele.
 
@@ -353,14 +354,70 @@ supabase db push
 3. **Publique o app** (passos 14 e 15).
 4. **Conferir.** Entre como profissional: *Financeiro* aparece no menu e mostra só dois cartões, *FATURAMENTO DO MÊS* e *TOTAL A REPASSAR AO STUDIO*, com setas ‹ › para mudar o mês (abre no mês atual). Sem lista e sem nomes de clientes. Os valores contam só dinheiro recebido no mês (Pix, dinheiro, débito, crédito), já com o desconto; permuta, crédito da cliente, estornos, lançamentos cancelados e sessões de pacote não entram. Entre como dona: *Financeiro* continua igual, e o valor de cada profissional em *Por profissional* é o mesmo que ela vê no próprio cartão. Depois de rodar `select * from check_invariants();`, não deve voltar nenhuma linha. Se voltar `I20`, o cartão da profissional difere do cálculo direto.
 
+**19f. Endurecimento do agente (Tarefa 12, incidente de 05/10/2026).** Leia antes `docs/INCIDENT-2026-10-05.md`. Faça nesta ordem, com o Supabase de produção já vinculado (passo 6) e **o agente em *Desligada***. Nada disto liga a Thaís.
+
+Antes de tudo, confirme o outro remetente (item 4 do incidente): se o agente antigo ainda responde pela mesma instância da Z-API, ele fica fora do botão de desligar deste sistema. Desative-o, ou confirme que `LEGACY_WEBHOOK_URL` aponta para algo que não responde clientes, antes de seguir.
+
+1. **Backup antes de mexer no banco:**
+
+```powershell
+$env:DATABASE_URL = Read-Host "DATABASE_URL de produção"
+```
+
+```powershell
+npm run backup
+```
+
+2. **Aplique a migration** (`20261008120000_agent_hardening.sql`: `phone_key`, `agent_settings`, `agent_decisions`, `sender` nas mensagens, `rpc_agent_set_mode`, I21 e I22). Ela é aditiva e preenche `phone_key` das clientes e das conversas existentes:
+
+```powershell
+supabase db push
+```
+
+3. **Publique todas as funções que mudaram.** Todas usam o código compartilhado (`_shared`), então todas precisam ser publicadas: `wa-webhook`, `agent-run`, `wa-sweep`, `send-confirmations` e `notify-reschedule`.
+
+```powershell
+supabase functions deploy wa-webhook --no-verify-jwt
+```
+
+```powershell
+supabase functions deploy agent-run --no-verify-jwt
+```
+
+```powershell
+supabase functions deploy wa-sweep --no-verify-jwt
+```
+
+```powershell
+supabase functions deploy send-confirmations --no-verify-jwt
+```
+
+```powershell
+supabase functions deploy notify-reschedule --no-verify-jwt
+```
+
+4. **Publique o app** (passos 14 e 15): o painel *Agente* ganha o seletor *Desligada | Sombra | Teste | No ar*, *Parar Thaís*, *Rascunhos da Thaís* e *Conversas não respondidas*; *Clientes* ganha o filtro *Sem telefone*.
+5. **Conferir, com o agente *Desligada*:**
+   - `select * from check_invariants();` não devolve linhas (agora inclui I21 e I22).
+   - O painel mostra "Desligada às HH:MM · envios depois disso: 0". Mande uma mensagem de um número de teste: ela aparece no banco e **nada** é respondido.
+   - Digite uma resposta pelo celular do studio para esse número: ela passa a existir em `wa_messages` com `sender = 'staff'` mesmo com o agente desligado (antes era descartada).
+   - Em *Clientes*, filtro *Sem telefone*: complete os cadastros que precisam de telefone. O vínculo é por `phone_key` (DDD + últimos 8 dígitos), então o 9º dígito não importa.
+6. **Ajustes opcionais** (já vêm com padrão seguro), na tabela `agent_settings`: `max_inbound_age_minutes = 10`, `breaker_max_sends = 6`, `breaker_window_minutes = 5`. O tempo de pausa da equipe é o `human_takeover_hours` que já existia.
+7. **Só então** vá ao passo 20, começando por *Sombra*. Ao ligar *Teste* ou *No ar*, o app avisa "Thaís responderá apenas mensagens recebidas a partir de agora." e mostra quantas conversas antigas ficam sem resposta automática (quarentena); elas aparecem em *Conversas não respondidas*.
+
 **20. Modo Teste com o seu telefone.** No app, *Agente*: em *Teste* adicione o seu número (com DDD) e escolha *Teste*. Mande mensagens do seu celular e confira:
 
+- comece por *Sombra* por algumas horas (só rascunhos, nenhuma mensagem sai) e leia *Rascunhos da Thaís*;
+- cliente já cadastrada nunca é perguntada pelo nome, e "oi" recebe só um cumprimento, sem menu de opções e sem citar agendamento;
+- se a equipe responder pelo celular, a Thaís para naquela conversa e nunca responde de novo uma mensagem já respondida;
+- ela só responde a mensagens recebidas depois de ligar e com menos de 10 minutos;
+- *Parar Thaís* desliga com um toque e o painel mostra "Desligada às HH:MM · envios depois disso: 0";
 - ela responde com até 3 linhas e até 2 mensagens;
 - agenda, remarca e cancela apenas horários seus (e aparecem em *Atividade recente*);
 - pergunta de saúde ou de desconto cai em *Precisa de você*;
 - mensagens de outros números continuam chegando no sistema antigo.
 
-Teste também um áudio, uma foto e uma figurinha. Se algo estiver estranho, volte para *Desligado*.
+Teste também um áudio, uma foto e uma figurinha. Se algo estiver estranho, toque em *Parar Thaís* (*Desligada*).
 
 **21. Modo No ar.** Quando estiver satisfeita, escolha *No ar* (o app pede confirmação). Acompanhe a página *Agente* nos primeiros dias.
 

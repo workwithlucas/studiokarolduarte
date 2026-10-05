@@ -35,7 +35,7 @@ export interface Deps {
   log: (event: string, data?: Record<string, unknown>) => void
 }
 
-export type AgentMode = 'off' | 'test' | 'live'
+export type AgentMode = 'off' | 'shadow' | 'test' | 'live'
 
 export interface Settings {
   agent_mode: AgentMode

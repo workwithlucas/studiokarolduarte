@@ -1,6 +1,7 @@
 // Typed wrapper around every rpc_*. The UI and the agent call the same functions.
 // Rule violations come back as error.message = code, error.details = pt-BR text.
 import type { Database } from '../types/db'
+import type { AgentModeResult } from './agentQueries'
 import type { ClientAccount, FinanceEntry, FinanceSummary, PaymentResult, SettleAllocation } from './finance'
 import { supabase } from './supabase'
 
@@ -125,6 +126,8 @@ export const rpc = {
   // agent (owner only)
   agentOverview: () => call('rpc_agent_overview', undefined as never),
   agentSetSettings: (a: Args<'rpc_agent_set_settings'>) => call('rpc_agent_set_settings', a),
+  agentSetMode: async (a: Args<'rpc_agent_set_mode'>) => (await call('rpc_agent_set_mode', a)) as unknown as AgentModeResult,
+  agentPauseConversation: (a: Args<'rpc_agent_pause_conversation'>) => call('rpc_agent_pause_conversation', a),
   agentReturnConversation: (a: Args<'rpc_agent_return_conversation'>) => call('rpc_agent_return_conversation', a),
   agentDismissAttention: (a: Args<'rpc_agent_dismiss_attention'>) => call('rpc_agent_dismiss_attention', a),
   agentRecentMessages: (a: Args<'rpc_agent_recent_messages'>) => call('rpc_agent_recent_messages', a),

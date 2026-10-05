@@ -1,13 +1,14 @@
 // Z-API: received-message webhook parser and send-text client.
 // Field names come from developer.z-api.io (webhooks/on-message-received-examples, message/send-text).
 import { normalizePhone } from './phone.ts'
+import { isoOf } from './time.ts'
 import type { Config, FetchFn } from './types.ts'
 
 export type InboundKind = 'text' | 'audio' | 'image' | 'sticker' | 'other'
 
 export type ParsedEvent =
   | { type: 'ignore'; reason: string }
-  | { type: 'from_me'; phone: string; externalId: string; fromApi: boolean; kind: InboundKind; body: string | null }
+  | { type: 'from_me'; phone: string; externalId: string; fromApi: boolean; kind: InboundKind; body: string | null; sentAt: string | null }
   | {
       type: 'inbound'
       phone: string
@@ -17,9 +18,16 @@ export type ParsedEvent =
       mediaUrl: string | null
       mimeType: string | null
       caption: string | null
+      /** Provider timestamp (ISO) when valid, else null: the database then uses its own clock. */
+      sentAt: string | null
     }
 
 const isObj = (v: unknown): v is Record<string, any> => typeof v === 'object' && v !== null && !Array.isArray(v)
+/** Z-API 'momment' (epoch ms). Anything not a plausible epoch-ms becomes null; the database also caps it at now(). */
+export function providerTime(v: unknown): string | null {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 1.42e12 || v > 4e12) return null
+  return isoOf(Math.trunc(v))
+}
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null)
 
 export function parseRawPayload(raw: string): unknown {
@@ -83,9 +91,9 @@ export function parseWebhook(payload: unknown): ParsedEvent {
   if (payload.fromMe === true) {
     const body =
       kind === 'text' ? text : kind === 'audio' ? '[áudio]' : kind === 'image' ? '[imagem]' : kind === 'sticker' ? '[figurinha]' : '[arquivo]'
-    return { type: 'from_me', phone, externalId, fromApi: payload.fromApi === true, kind, body }
+    return { type: 'from_me', phone, externalId, fromApi: payload.fromApi === true, kind, body, sentAt: providerTime(payload.momment) }
   }
-  return { type: 'inbound', phone, externalId, kind, text, mediaUrl, mimeType, caption }
+  return { type: 'inbound', phone, externalId, kind, text, mediaUrl, mimeType, caption, sentAt: providerTime(payload.momment) }
 }
 
 export interface SendResult {

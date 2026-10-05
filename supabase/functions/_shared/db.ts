@@ -36,7 +36,7 @@ export function parseSettings(rows: Array<{ key: string; value: unknown }>): Set
   const away = m.get('agent_away_message')
   const num = (k: string, def: number, lo: number, hi: number) => (isInt(m.get(k), lo, hi) ? (m.get(k) as number) : def)
   return {
-    agent_mode: mode === 'test' || mode === 'live' ? mode : 'off', // anything unknown fails closed
+    agent_mode: mode === 'shadow' || mode === 'test' || mode === 'live' ? mode : 'off', // anything unknown fails closed
     agent_window_start: isTime(m.get('agent_window_start')) ? (m.get('agent_window_start') as string) : d.agent_window_start,
     agent_window_end: isTime(m.get('agent_window_end')) ? (m.get('agent_window_end') as string) : d.agent_window_end,
     agent_test_numbers: Array.isArray(nums)
@@ -57,11 +57,16 @@ export async function loadSettings(db: Db): Promise<Settings> {
   return parseSettings(rows ?? [])
 }
 
-/** Mode gate shared by every entry point: off blocks everything, test only passes whitelisted phones. */
+/** May the agent SEND to this phone in this mode? off and shadow never send; test only to whitelisted phones. */
 export function modeAllows(settings: Settings, phone: string): boolean {
   if (settings.agent_mode === 'live') return true
   if (settings.agent_mode === 'test') return settings.agent_test_numbers.includes(phone)
   return false
+}
+
+/** Should the pipeline run at all (gates, drafts)? Only off stops it; test narrows it to whitelisted phones. */
+export function modeRuns(settings: Settings, phone: string): boolean {
+  return settings.agent_mode === 'off' ? false : settings.agent_mode === 'test' ? settings.agent_test_numbers.includes(phone) : true
 }
 
 const CONV_COLS =
@@ -84,6 +89,7 @@ export interface StoredMessage {
   body: string | null
   purpose: string | null
   from_human: boolean
+  sender?: 'client' | 'agent' | 'staff'
   created_at: string
 }
 
@@ -91,7 +97,7 @@ export async function recentMessages(db: Db, conversationId: string, limit: numb
   const rows = unwrap<StoredMessage[]>(
     await db
       .from('wa_messages')
-      .select('id,direction,external_id,kind,body,purpose,from_human,created_at')
+      .select('id,direction,external_id,kind,body,purpose,from_human,sender,created_at')
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: false })
       .limit(limit),
@@ -121,12 +127,9 @@ export async function storeOutbound(
   externalId: string | null,
   body: string,
   purpose: 'reply' | 'away' | 'confirmation' | 'handoff',
+  decisionId: string | null = null,
 ): Promise<string | null> {
-  const rows = unwrap<Array<{ id: string }>>(
-    await db
-      .from('wa_messages')
-      .insert({ conversation_id: conversationId, direction: 'out', external_id: externalId, kind: 'text', body, purpose })
-      .select('id'),
-  )
-  return rows?.[0]?.id ?? null
+  return await callRpc<string | null>(db, 'agent_store_outbound', {
+    p_conversation_id: conversationId, p_external_id: externalId, p_body: body, p_purpose: purpose, p_decision_id: decisionId,
+  })
 }

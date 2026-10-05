@@ -2,22 +2,29 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Button, EmptyState, FieldLabel, Input, Kicker, Pill, SectionHeader, Sheet, Skeleton, Textarea, Toggle, useSnackbar } from '../components/ui'
 import { AppointmentSheet } from '../features/agenda/AppointmentSheet'
-import { actionText, agentKey, MODE_LABEL, useAgentOverview, type AgentAction, type AgentMode, type AgentSettings, type AttentionItem } from '../lib/agentQueries'
-import { formatDateTime } from '../lib/datetime'
+import { actionText, agentKey, decisionText, MODE_LABEL, useAgentOverview, type AgentAction, type AgentMode, type AgentSettings } from '../lib/agentQueries'
+import { formatDateTime, formatTime } from '../lib/datetime'
 import { formatPhoneBR, toTitlePt } from '../lib/format'
 import { APPT_SELECT, type AppointmentRow } from '../lib/queries'
 import { messageOf, rpc, supabase } from '../lib/rpc'
 
-const MODES: AgentMode[] = ['off', 'test', 'live']
+const MODES: AgentMode[] = ['off', 'shadow', 'test', 'live']
+
+/** What the messages sheet needs from a conversation (attention and unanswered items both fit). */
+interface ThreadRef {
+  id: string
+  phone: string
+  client_name: string | null
+}
 const card = 'rounded-[var(--radius-card)] border border-line bg-surface p-5 shadow-card'
 
 export function AgentPage() {
   const q = useAgentOverview()
   const qc = useQueryClient()
   const snack = useSnackbar()
-  const [confirmLive, setConfirmLive] = useState(false)
+  const [confirmMode, setConfirmMode] = useState<'test' | 'live' | null>(null)
   const [appt, setAppt] = useState<AppointmentRow | null>(null)
-  const [messagesFor, setMessagesFor] = useState<AttentionItem | null>(null)
+  const [messagesFor, setMessagesFor] = useState<ThreadRef | null>(null)
 
   const s = q.data?.settings
   const refresh = () => qc.invalidateQueries({ queryKey: agentKey })
@@ -31,6 +38,18 @@ export function AgentPage() {
     } catch (e) {
       snack.show(messageOf(e), 'error')
       return false
+    }
+  }
+
+  /** The only way to change the mode: rpc_agent_set_mode (owner only, audited). */
+  async function setMode(m: AgentMode) {
+    try {
+      const res = await rpc.agentSetMode({ p_mode: m })
+      await refresh()
+      const n = res.quarantined_threads
+      snack.show(n > 0 ? `Agente: ${MODE_LABEL[m]} · ${n} ${n === 1 ? 'conversa antiga ficou' : 'conversas antigas ficaram'} sem resposta automática` : `Agente: ${MODE_LABEL[m]}`, 'info')
+    } catch (e) {
+      snack.show(messageOf(e), 'error')
     }
   }
 
@@ -62,7 +81,7 @@ export function AgentPage() {
   }
   if (q.isError) return <EmptyState title="Não foi possível carregar o agente" help={messageOf(q.error)} />
 
-  const { attention, actions } = q.data!
+  const { attention, actions, hardening: h, drafts, unanswered } = q.data!
 
   return (
     <div className="space-y-8">
@@ -71,16 +90,33 @@ export function AgentPage() {
         <h1 className="title-serif text-3xl">Agente</h1>
       </header>
 
+      {h.breaker_at && (
+        <div role="alert" className="rounded-[var(--radius-card)] border border-danger bg-danger/10 p-4">
+          <p className="font-medium !text-danger">A Thaís foi desligada automaticamente</p>
+          <p className="text-help">Ela tentou enviar mais de {h.breaker_max_sends} mensagens em {h.breaker_window_minutes} minutos ({formatDateTime(h.breaker_at)}). Veja as conversas antes de ligar de novo.</p>
+        </div>
+      )}
+
       <section className={card}>
         <SectionHeader>Estado</SectionHeader>
-        <div role="radiogroup" aria-label="Estado do agente" className="grid grid-cols-3 gap-1 rounded-full border border-line p-1">
+        {s.agent_mode !== 'off' && (
+          <Button block variant="danger" className="mb-3" onClick={() => void setMode('off')}>
+            Parar Thaís
+          </Button>
+        )}
+        {s.agent_mode === 'off' && h.off_since && (
+          <p className="mb-3 font-medium">
+            Desligada às {formatTime(h.off_since)} · envios depois disso: {h.sends_after_off}
+          </p>
+        )}
+        <div role="radiogroup" aria-label="Estado do agente" className="grid grid-cols-4 gap-1 rounded-full border border-line p-1">
           {MODES.map((m) => (
             <button
               key={m}
               type="button"
               role="radio"
               aria-checked={s.agent_mode === m}
-              onClick={() => (m === 'live' && s.agent_mode !== 'live' ? setConfirmLive(true) : m !== s.agent_mode && void save({ agent_mode: m }, `Agente: ${MODE_LABEL[m]}`))}
+              onClick={() => (m === 'live' || m === 'test' ? m !== s.agent_mode && setConfirmMode(m) : m !== s.agent_mode && void setMode(m))}
               className={`label-caps hit rounded-full px-2 transition-colors duration-200 ${s.agent_mode === m ? 'bg-surface-2 !text-ink ring-1 ring-border-gold' : ''}`}
             >
               {MODE_LABEL[m]}
@@ -89,6 +125,7 @@ export function AgentPage() {
         </div>
         <p className="text-help mt-3">
           {s.agent_mode === 'off' && 'A Thaís não responde ninguém.'}
+          {s.agent_mode === 'shadow' && 'A Thaís escreve rascunhos e não envia nada. Veja os rascunhos abaixo.'}
           {s.agent_mode === 'test' && 'A Thaís responde só aos números de teste. As demais mensagens seguem para o sistema antigo.'}
           {s.agent_mode === 'live' && 'A Thaís responde todas as clientes.'}
         </p>
@@ -111,6 +148,65 @@ export function AgentPage() {
           <FieldLabel htmlFor="conf-hour">Enviar a partir de</FieldLabel>
           <Input id="conf-hour" type="time" step={900} defaultValue={s.confirmation_hour} onBlur={(e) => e.target.value && e.target.value !== s.confirmation_hour && void save({ confirmation_hour: e.target.value })} />
         </div>
+      </section>
+
+      {(s.agent_mode === 'shadow' || drafts.length > 0) && (
+        <section>
+          <SectionHeader>Rascunhos da Thaís</SectionHeader>
+          {drafts.length === 0 ? (
+            <EmptyState title="Nenhum rascunho ainda" help="No modo Sombra, o que a Thaís responderia aparece aqui. Nada é enviado." />
+          ) : (
+            <ul className="space-y-3">
+              {drafts.map((d) => (
+                <li key={d.id} className={card}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="title-serif text-xl">{d.client_name ? toTitlePt(d.client_name) : d.phone ? formatPhoneBR(d.phone) : 'Sem identificação'}</h3>
+                    <Pill>{formatDateTime(d.at)}</Pill>
+                  </div>
+                  <p className="text-help mt-2">Cliente: {d.inbound ?? '[sem texto]'}</p>
+                  <p className="mt-1 whitespace-pre-line">{d.draft_text ?? ''}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+
+      <section>
+        <SectionHeader>Conversas não respondidas</SectionHeader>
+        {unanswered.length === 0 ? (
+          <EmptyState title="Nenhuma conversa ficou sem resposta" help="Mensagens antigas, já respondidas pela equipe ou anteriores a ligar a Thaís aparecem aqui." />
+        ) : (
+          <ul className="space-y-3">
+            {unanswered.map((u) => (
+              <li key={u.id} className={card}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="title-serif text-xl">{u.client_name ? toTitlePt(u.client_name) : formatPhoneBR(u.phone)}</h3>
+                  <Pill>{u.reason}</Pill>
+                  <Pill>{formatDateTime(u.inbound_at)}</Pill>
+                </div>
+                <p className="text-help mt-1 truncate">{u.inbound ?? 'Sem mensagem'}</p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <a href={`https://wa.me/${u.phone}`} target="_blank" rel="noopener noreferrer" className="hit inline-flex items-center justify-center rounded-full border border-line px-5 text-sm font-medium">
+                    Abrir no WhatsApp
+                  </a>
+                  {u.paused ? (
+                    <Button variant="secondary" onClick={() => void run(() => rpc.agentReturnConversation({ p_conversation_id: u.id }), 'Conversa devolvida à Thaís')}>
+                      Devolver à Thaís
+                    </Button>
+                  ) : (
+                    <Button variant="secondary" onClick={() => void run(() => rpc.agentPauseConversation({ p_conversation_id: u.id }), 'Thaís pausada nesta conversa')}>
+                      Pausar Thaís
+                    </Button>
+                  )}
+                  <Button variant="ghost" onClick={() => setMessagesFor(u)}>
+                    Ver últimas mensagens
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <section>
@@ -181,27 +277,33 @@ export function AgentPage() {
       </section>
 
       <Sheet
-        open={confirmLive}
-        onClose={() => setConfirmLive(false)}
-        title="Colocar a Thaís no ar?"
+        open={confirmMode !== null}
+        onClose={() => setConfirmMode(null)}
+        title={confirmMode === 'live' ? 'Colocar a Thaís no ar?' : 'Ligar a Thaís em modo Teste?'}
         footer={
           <div className="flex gap-2">
-            <Button variant="secondary" block onClick={() => setConfirmLive(false)}>
+            <Button variant="secondary" block onClick={() => setConfirmMode(null)}>
               Cancelar
             </Button>
             <Button
               block
               onClick={() => {
-                setConfirmLive(false)
-                void save({ agent_mode: 'live' }, 'Agente: No ar')
+                const m = confirmMode
+                setConfirmMode(null)
+                if (m) void setMode(m)
               }}
             >
-              Colocar no ar
+              {confirmMode === 'live' ? 'Colocar no ar' : 'Ligar em Teste'}
             </Button>
           </div>
         }
       >
-        <p>A Thaís vai responder todas as clientes que escreverem no WhatsApp do studio, dentro da janela de atendimento.</p>
+        <p className="font-medium">Thaís responderá apenas mensagens recebidas a partir de agora.</p>
+        <p className="text-help mt-2">
+          {h.would_quarantine_threads === 0
+            ? 'Nenhuma conversa antiga sem resposta.'
+            : `${h.would_quarantine_threads} ${h.would_quarantine_threads === 1 ? 'conversa antiga sem resposta ficará' : 'conversas antigas sem resposta ficarão'} em quarentena: a Thaís não vai respondê-las. Elas aparecem em "Conversas não respondidas".`}
+        </p>
       </Sheet>
 
       <MessagesSheet item={messagesFor} onClose={() => setMessagesFor(null)} />
@@ -279,7 +381,7 @@ function WindowForm({ s, onSave }: { s: AgentSettings; onSave: (p: Record<string
   )
 }
 
-function MessagesSheet({ item, onClose }: { item: AttentionItem | null; onClose: () => void }) {
+function MessagesSheet({ item, onClose }: { item: ThreadRef | null; onClose: () => void }) {
   return (
     <Sheet open={!!item} onClose={onClose} kicker="Últimas mensagens" title={item ? (item.client_name ? toTitlePt(item.client_name) : formatPhoneBR(item.phone)) : ''}>
       {item && <MessagesBody id={item.id} />}
@@ -290,7 +392,7 @@ function MessagesSheet({ item, onClose }: { item: AttentionItem | null; onClose:
 function MessagesBody({ id }: { id: string }) {
   const q = useQuery({
     queryKey: ['agent', 'messages', id],
-    queryFn: async () => (await rpc.agentRecentMessages({ p_conversation_id: id, p_limit: 6 })) as unknown as Array<{ direction: string; kind: string; body: string | null; created_at: string }>,
+    queryFn: async () => (await rpc.agentRecentMessages({ p_conversation_id: id, p_limit: 6 })) as unknown as Array<{ direction: string; kind: string; body: string | null; created_at: string; sender: string; decision_action: string | null; decision_reason: string | null }>,
     staleTime: 0,
   })
   if (q.isLoading) return <Skeleton className="h-32" />
@@ -302,7 +404,8 @@ function MessagesBody({ id }: { id: string }) {
       {rows.map((m, i) => (
         <li key={i}>
           <p className="text-help">
-            {m.direction === 'in' ? 'Cliente' : 'Studio'} · {formatDateTime(m.created_at)}
+            {m.direction === 'in' ? 'Cliente' : m.sender === 'staff' ? 'Equipe' : 'Thaís'} · {formatDateTime(m.created_at)}
+            {m.sender === 'agent' && m.decision_action ? ` · ${decisionText(m.decision_action, m.decision_reason)}` : ''}
           </p>
           <p className="whitespace-pre-line">{m.body ?? '[sem texto]'}</p>
         </li>

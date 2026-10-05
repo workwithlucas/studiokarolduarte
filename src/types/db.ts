@@ -88,6 +88,81 @@ export type Database = {
           },
         ]
       }
+      agent_decisions: {
+        Row: {
+          action: string
+          attempts: number
+          conversation_id: string | null
+          decided_at: string
+          draft_text: string | null
+          error_text: string | null
+          id: string
+          inbound_at: string | null
+          live_since: string | null
+          max_age_minutes: number | null
+          message_id: string
+          phone_key: string | null
+          reason: string | null
+        }
+        Insert: {
+          action: string
+          attempts?: number
+          conversation_id?: string | null
+          decided_at?: string
+          draft_text?: string | null
+          error_text?: string | null
+          id?: string
+          inbound_at?: string | null
+          live_since?: string | null
+          max_age_minutes?: number | null
+          message_id: string
+          phone_key?: string | null
+          reason?: string | null
+        }
+        Update: {
+          action?: string
+          attempts?: number
+          conversation_id?: string | null
+          decided_at?: string
+          draft_text?: string | null
+          error_text?: string | null
+          id?: string
+          inbound_at?: string | null
+          live_since?: string | null
+          max_age_minutes?: number | null
+          message_id?: string
+          phone_key?: string | null
+          reason?: string | null
+        }
+        Relationships: []
+      }
+      agent_settings: {
+        Row: {
+          breaker_max_sends: number
+          breaker_window_minutes: number
+          id: boolean
+          live_since: string | null
+          max_inbound_age_minutes: number
+          off_since: string | null
+        }
+        Insert: {
+          breaker_max_sends?: number
+          breaker_window_minutes?: number
+          id?: boolean
+          live_since?: string | null
+          max_inbound_age_minutes?: number
+          off_since?: string | null
+        }
+        Update: {
+          breaker_max_sends?: number
+          breaker_window_minutes?: number
+          id?: boolean
+          live_since?: string | null
+          max_inbound_age_minutes?: number
+          off_since?: string | null
+        }
+        Relationships: []
+      }
       appointment_addons: {
         Row: {
           addon_id: string
@@ -405,6 +480,7 @@ export type Database = {
           name: string
           notes: string | null
           phone_e164: string | null
+          phone_key: string | null
         }
         Insert: {
           archived?: boolean
@@ -415,6 +491,7 @@ export type Database = {
           name: string
           notes?: string | null
           phone_e164?: string | null
+          phone_key?: string | null
         }
         Update: {
           archived?: boolean
@@ -425,6 +502,7 @@ export type Database = {
           name?: string
           notes?: string | null
           phone_e164?: string | null
+          phone_key?: string | null
         }
         Relationships: []
       }
@@ -919,6 +997,7 @@ export type Database = {
           pending_action: Json | null
           pending_since: string | null
           phone_e164: string
+          phone_key: string | null
         }
         Insert: {
           attention_at?: string | null
@@ -939,6 +1018,7 @@ export type Database = {
           pending_action?: Json | null
           pending_since?: string | null
           phone_e164: string
+          phone_key?: string | null
         }
         Update: {
           attention_at?: string | null
@@ -959,6 +1039,7 @@ export type Database = {
           pending_action?: Json | null
           pending_since?: string | null
           phone_e164?: string
+          phone_key?: string | null
         }
         Relationships: [
           {
@@ -1003,34 +1084,43 @@ export type Database = {
           body: string | null
           conversation_id: string
           created_at: string
+          decision_id: string | null
           direction: string
           external_id: string | null
           from_human: boolean
           id: string
           kind: string
           purpose: string | null
+          sender: string
+          sent_at: string
         }
         Insert: {
           body?: string | null
           conversation_id: string
           created_at?: string
+          decision_id?: string | null
           direction: string
           external_id?: string | null
           from_human?: boolean
           id?: string
           kind: string
           purpose?: string | null
+          sender: string
+          sent_at?: string
         }
         Update: {
           body?: string | null
           conversation_id?: string
           created_at?: string
+          decision_id?: string | null
           direction?: string
           external_id?: string | null
           from_human?: boolean
           id?: string
           kind?: string
           purpose?: string | null
+          sender?: string
+          sent_at?: string
         }
         Relationships: [
           {
@@ -1081,6 +1171,27 @@ export type Database = {
           credit_used_cents: number | null
         }
         Relationships: []
+      }
+      v_agent_inbound: {
+        Row: {
+          body: string | null
+          conversation_id: string | null
+          decision_action: string | null
+          decision_reason: string | null
+          inbound_at: string | null
+          message_id: string | null
+          message_row_id: string | null
+          state: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wa_messages_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "wa_conversations"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       v_client_account: {
         Row: {
@@ -1372,6 +1483,7 @@ export type Database = {
         Args: { p_professional_id: string }
         Returns: undefined
       }
+      _name_fold: { Args: { p: string }; Returns: string }
       _name_key: { Args: { p: string }; Returns: string }
       _name_similarity: { Args: { a: string; b: string }; Returns: number }
       _payment_lines: {
@@ -1449,12 +1561,21 @@ export type Database = {
         }
         Returns: undefined
       }
+      agent_gate_state: {
+        Args: {
+          p_conversation_id: string
+          p_exclude_decision?: string
+          p_message_id: string
+        }
+        Returns: Json
+      }
       agent_ingest_inbound: {
         Args: {
           p_body: string
           p_external_id: string
           p_kind: string
           p_phone: string
+          p_sent_at?: string
         }
         Returns: {
           conversation_id: string
@@ -1468,6 +1589,7 @@ export type Database = {
           p_hours: number
           p_kind: string
           p_phone: string
+          p_sent_at?: string
         }
         Returns: string
       }
@@ -1486,7 +1608,32 @@ export type Database = {
         }[]
       }
       agent_purge_old: { Args: never; Returns: Json }
+      agent_record_decision: {
+        Args: {
+          p_action: string
+          p_conversation_id: string
+          p_draft_text?: string
+          p_error_text?: string
+          p_id?: string
+          p_inbound_at: string
+          p_live_since?: string
+          p_max_age?: number
+          p_message_id: string
+          p_reason: string
+        }
+        Returns: string
+      }
       agent_release: { Args: { p_conversation_id: string }; Returns: undefined }
+      agent_store_outbound: {
+        Args: {
+          p_body: string
+          p_conversation_id: string
+          p_decision_id?: string
+          p_external_id: string
+          p_purpose: string
+        }
+        Returns: string
+      }
       agent_touch_conversation: {
         Args: { p_client_ids: string[]; p_phone: string }
         Returns: string
@@ -1509,6 +1656,7 @@ export type Database = {
       is_owner: { Args: never; Returns: boolean }
       is_staff: { Args: never; Returns: boolean }
       normalize_phone: { Args: { p: string }; Returns: string }
+      phone_key: { Args: { p: string }; Returns: string }
       rpc_add_client_credit: {
         Args: {
           p_amount_cents: number
@@ -1535,19 +1683,27 @@ export type Database = {
         Returns: undefined
       }
       rpc_agent_overview: { Args: never; Returns: Json }
+      rpc_agent_pause_conversation: {
+        Args: { p_conversation_id: string }
+        Returns: undefined
+      }
       rpc_agent_recent_messages: {
         Args: { p_conversation_id: string; p_limit?: number }
         Returns: {
           body: string
           created_at: string
+          decision_action: string
+          decision_reason: string
           direction: string
           kind: string
+          sender: string
         }[]
       }
       rpc_agent_return_conversation: {
         Args: { p_conversation_id: string }
         Returns: undefined
       }
+      rpc_agent_set_mode: { Args: { p_mode: string }; Returns: Json }
       rpc_agent_set_settings: { Args: { p_patch: Json }; Returns: undefined }
       rpc_book_appointment: {
         Args: {
@@ -1696,6 +1852,10 @@ export type Database = {
         Args: { p_from: string; p_professional_id?: string; p_to: string }
         Returns: Json
       }
+      rpc_find_client_by_name: {
+        Args: { p_name: string; p_phone: string }
+        Returns: Json
+      }
       rpc_find_client_by_phone: {
         Args: { p_phone: string }
         Returns: {
@@ -1707,6 +1867,7 @@ export type Database = {
           name: string
           notes: string | null
           phone_e164: string | null
+          phone_key: string | null
         }[]
         SetofOptions: {
           from: "*"

@@ -19,6 +19,7 @@ const FILTERS: Array<{ key: string; label: string }> = [
   { key: 'recurring', label: 'Recorrentes' },
   { key: 'new', label: 'Novas' },
   { key: 'inactive', label: 'Inativas' },
+  { key: 'no_phone', label: 'Sem telefone' },
 ]
 
 export function ClientesPage() {
