@@ -22,8 +22,9 @@ Regras deste roteiro:
 9. Financeiro: comissões e o "a receber" antigo (passo 19b)
 10. Conta da cliente, Tarefa 9: backup, depois `supabase db push` (passo 19c)
 11. Ajuste de horário, Tarefa 10: backup, depois `supabase db push` e deploy de `notify-reschedule` (passo 19d)
-12. Agente em modo *Teste* (passo 20)
-13. Agente em modo *No ar* (passo 21)
+12. Financeiro da profissional, Tarefa 11: backup, depois `supabase db push` (passo 19e)
+13. Agente em modo *Teste* (passo 20)
+14. Agente em modo *No ar* (passo 21)
 
 Os demais passos (contas, Vault do cron, hospedagem do app, webhook da Z-API) entram no meio dessa ordem, na numeração abaixo. O app precisa estar publicado (passos 14 e 15) antes das importações, porque elas são feitas por ele.
 
@@ -330,6 +331,27 @@ supabase functions deploy notify-reschedule --no-verify-jwt
 4. **Publique o app** (passos 14 e 15).
 5. **Conferir.** Em *Agenda*, abra um agendamento futuro > *Ajustar horário*: digite data (DD/MM/AAAA) e horário (HH:MM, 24h); *Salvar* só liga com valores válidos. A duração não muda e vale qualquer minuto. Se o horário bate com outro agendamento ou bloqueio, o app mostra com quem. Ao concluir um atendimento antes do fim previsto, aparece *Antecipar para HH:MM*; o mesmo atalho está ao tocar num horário livre da grade. Com *Avisar cliente* ligado, a cliente recebe a mensagem fixa pelo WhatsApp (só com a Thaís em *Teste* ou *No ar*, e só se houver telefone). Depois de rodar a verificação de invariantes (`select * from check_invariants();`), não deve voltar nenhuma linha. Se voltar `I19`, o vencimento de algum lançamento em aberto foi editado à mão e difere do dia do agendamento.
 6. A confirmação de amanhã que já foi enviada não é reenviada quando o horário muda; a que ainda não saiu usa o horário novo. A Thaís não muda: a disponibilidade já reflete os horários novos.
+
+**19e. Financeiro da profissional (Tarefa 11).** Faça nesta ordem, com o Supabase de produção já vinculado (passo 6). Traz uma migration nova (`20261007120000`): a função interna `finance_professional_totals`, `rpc_my_finance_summary`, o código de erro `RANGE_TOO_LARGE` e a verificação I20. O relatório por profissional do financeiro da dona passa a usar a mesma função. Nenhuma permissão de leitura é dada às profissionais e nada é renomeado.
+
+1. **Backup antes de mexer no banco:**
+
+```powershell
+$env:DATABASE_URL = Read-Host "DATABASE_URL de produção"
+```
+
+```powershell
+npm run backup
+```
+
+2. **Aplique a migration:**
+
+```powershell
+supabase db push
+```
+
+3. **Publique o app** (passos 14 e 15).
+4. **Conferir.** Entre como profissional: *Financeiro* aparece no menu e mostra só dois cartões, *FATURAMENTO DO MÊS* e *TOTAL A REPASSAR AO STUDIO*, com setas ‹ › para mudar o mês (abre no mês atual). Sem lista e sem nomes de clientes. Os valores contam só dinheiro recebido no mês (Pix, dinheiro, débito, crédito), já com o desconto; permuta, crédito da cliente, estornos, lançamentos cancelados e sessões de pacote não entram. Entre como dona: *Financeiro* continua igual, e o valor de cada profissional em *Por profissional* é o mesmo que ela vê no próprio cartão. Depois de rodar `select * from check_invariants();`, não deve voltar nenhuma linha. Se voltar `I20`, o cartão da profissional difere do cálculo direto.
 
 **20. Modo Teste com o seu telefone.** No app, *Agente*: em *Teste* adicione o seu número (com DDD) e escolha *Teste*. Mande mensagens do seu celular e confira:
 

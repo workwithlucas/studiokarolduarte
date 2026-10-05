@@ -33,6 +33,7 @@ export const ERROR_MESSAGES = {
   CREDIT_INSUFFICIENT: 'O crédito da cliente não cobre este valor.',
   CREDIT_IN_USE: 'Este crédito já foi usado; estorne os usos primeiro.',
   METHOD_NOT_ALLOWED: 'Forma de pagamento não permitida aqui.',
+  RANGE_TOO_LARGE: 'O período não pode passar de 366 dias.',
 } as const
 
 export type ErrorCode = keyof typeof ERROR_MESSAGES
@@ -102,6 +103,8 @@ export const rpc = {
   getFreeGap: (a: Args<'rpc_get_free_gap'>) => call('rpc_get_free_gap', a),
   createBlock: (a: Args<'rpc_create_block'>) => call('rpc_create_block', a),
   deleteBlock: (a: Args<'rpc_delete_block'>) => call('rpc_delete_block', a),
+  // finance (professional: own totals only)
+  myFinanceSummary: async (a: Args<'rpc_my_finance_summary'>) => (await call('rpc_my_finance_summary', a))[0] ?? { gross_cents: 0, studio_share_cents: 0 },
   // finance (owner only)
   registerPayments: async (a: Args<'rpc_register_payments'>) => (await call('rpc_register_payments', a)) as unknown as PaymentResult,
   completeAndPay: async (a: Args<'rpc_complete_and_pay'>) => (await call('rpc_complete_and_pay', a)) as unknown as PaymentResult,

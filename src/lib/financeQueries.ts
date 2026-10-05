@@ -45,6 +45,13 @@ export function useFinanceSummary(from: string, to: string, professionalId: stri
   })
 }
 
+export function useMyFinanceSummary(from: string, to: string) {
+  return useQuery({
+    queryKey: ['my-finance-summary', from, to],
+    queryFn: () => rpc.myFinanceSummary({ p_from: from, p_to: to }),
+  })
+}
+
 export function useFinanceList(f: ListFilters, enabled = true) {
   return useQuery({
     queryKey: ['finance-list', f.mode, f.from, f.to, f.status ?? '', f.professionalId ?? '', f.clientId ?? '', f.query ?? '', f.includeReversed ?? false, f.limit ?? 200],

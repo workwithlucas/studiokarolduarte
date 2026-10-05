@@ -5,6 +5,7 @@ import { AppLayout } from './layout/AppLayout'
 import { AgentPage } from './pages/AgentPage'
 import { AgendaPage } from './pages/AgendaPage'
 import { FinanceiroPage } from './pages/FinanceiroPage'
+import { MyFinancePage } from './pages/MyFinancePage'
 import { CatalogPage } from './pages/CatalogPage'
 import { ClientPage } from './pages/ClientPage'
 import { ClientesPage } from './pages/ClientesPage'
@@ -34,6 +35,11 @@ function OwnerOnly({ children }: { children: React.ReactNode }) {
   return isOwner ? <>{children}</> : <Navigate to="/" replace />
 }
 
+function FinanceiroRoute() {
+  const { isOwner } = useAuth()
+  return isOwner ? <FinanceiroPage /> : <MyFinancePage />
+}
+
 export function App() {
   return (
     <Routes>
@@ -53,14 +59,7 @@ export function App() {
             </OwnerOnly>
           }
         />
-        <Route
-          path="financeiro"
-          element={
-            <OwnerOnly>
-              <FinanceiroPage />
-            </OwnerOnly>
-          }
-        />
+        <Route path="financeiro" element={<FinanceiroRoute />} />
         <Route
           path="agente"
           element={

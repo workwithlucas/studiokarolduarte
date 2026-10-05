@@ -244,7 +244,7 @@ export function totalsByMethod(rows: Array<Pick<StatementRow, 'method' | 'paymen
 // ---------------------------------------------------------------- RPC result shapes (jsonb)
 export interface FinanceSummary {
   cards: { received_cents: number; receivable_cents: number; overdue_cents: number; expenses_paid_cents: number; result_cents: number }
-  by_professional: Array<{ professional_id: string; name: string; count: number; production_cents: number; commission_cents: number; studio_cents: number }>
+  by_professional: Array<{ professional_id: string; name: string; count: number; production_cents: number; commission_cents: number; studio_cents: number; gross_cents: number; studio_share_cents: number }>
   by_method: Array<{ method: string; cents: number; count: number }>
   barter_cents: number
   /** credit_balance and adjustment: never part of received_cents. */

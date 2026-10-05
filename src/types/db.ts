@@ -1499,6 +1499,13 @@ export type Database = {
           entity_id: string
         }[]
       }
+      finance_professional_totals: {
+        Args: { p_from: string; p_professional_id: string; p_to: string }
+        Returns: {
+          gross_cents: number
+          studio_share_cents: number
+        }[]
+      }
       is_owner: { Args: never; Returns: boolean }
       is_staff: { Args: never; Returns: boolean }
       normalize_phone: { Args: { p: string }; Returns: string }
@@ -1736,6 +1743,13 @@ export type Database = {
       rpc_mark_no_show: {
         Args: { p_appointment_id: string }
         Returns: undefined
+      }
+      rpc_my_finance_summary: {
+        Args: { p_from: string; p_to: string }
+        Returns: {
+          gross_cents: number
+          studio_share_cents: number
+        }[]
       }
       rpc_register_payments: {
         Args: {

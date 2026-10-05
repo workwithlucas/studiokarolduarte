@@ -1,6 +1,7 @@
 // End-to-end flow against the LOCAL Supabase, through the same src/lib/rpc.ts wrappers the UI uses.
 // Needs: supabase start, npm run dev:users. Prints failures and a one-line summary only.
 import { ymdOf, addDaysYMD, todaySP } from '../src/lib/datetime'
+import { monthBounds } from '../src/lib/finance'
 import { readFileSync } from 'node:fs'
 import { decodeCsv, parseCsv, planImport, runImport } from '../src/lib/import/clients'
 import { fetchAppointmentKeys, fetchExistingClients, fetchImportContext } from '../src/lib/import/existing'
@@ -748,6 +749,28 @@ async function financeFlow(maraId: string) {
   check('finance: expenses never appear in the income Extrato', income.length === 0)
 }
 
+/** Professional finance tab (task 11): own totals equal the owner report; no ledger access. Starts and ends as Karol. */
+async function profFinanceFlow(maraId: string, karolId: string) {
+  const { from, to } = monthBounds(todaySP().slice(0, 7))
+  const owner = await rpc.financeSummary({ p_from: from, p_to: to, p_professional_id: null })
+  const rowOf = (id: string) => owner.by_professional.find((p) => p.professional_id === id)
+  const mRow = rowOf(maraId)
+  const kRow = rowOf(karolId)
+
+  const kMine = await rpc.myFinanceSummary({ p_from: from, p_to: to })
+  check('prof finance: Karol own totals = owner report', kMine.gross_cents === (kRow?.gross_cents ?? 0) && kMine.studio_share_cents === (kRow?.studio_share_cents ?? 0), JSON.stringify([kMine, kRow]))
+
+  await login('mara@studio.test')
+  const mMine = await rpc.myFinanceSummary({ p_from: from, p_to: to })
+  check('prof finance: Mara has money this month', mMine.gross_cents > 0, JSON.stringify(mMine))
+  check('prof finance: Mara own totals = owner report', mMine.gross_cents === mRow?.gross_cents && mMine.studio_share_cents === mRow?.studio_share_cents, JSON.stringify([mMine, mRow]))
+  await expectCode('prof finance: range over 366 days -> RANGE_TOO_LARGE', 'RANGE_TOO_LARGE', () => rpc.myFinanceSummary({ p_from: from, p_to: addDaysYMD(from, 366) }))
+  const led = await supabase.from('v_ledger').select('id').limit(1)
+  const pay = await supabase.from('ledger_payments').select('id').limit(1)
+  check('prof finance: Mara cannot read v_ledger or ledger_payments', (led.data ?? []).length === 0 && (pay.data ?? []).length === 0)
+  await login('karol@studio.test')
+}
+
 async function main() {
   await login('karol@studio.test')
 
@@ -896,6 +919,8 @@ async function main() {
   await accountFlow(mara.id)
   await login('karol@studio.test')
   await adjustFlow(mara.id, karol.id)
+  await login('karol@studio.test')
+  await profFinanceFlow(mara.id, karol.id)
 
   // ---- cleanup + invariants
   await login('karol@studio.test')

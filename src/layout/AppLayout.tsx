@@ -18,7 +18,8 @@ export function AppLayout() {
   const more = [
     { to: '/catalogo', label: 'Catálogo', icon: Sparkles },
     { to: '/pacotes', label: 'Pacotes', icon: Package },
-    ...(isOwner ? [{ to: '/financeiro', label: 'Financeiro', icon: Wallet }, { to: '/agente', label: 'Agente', icon: Bot }, { to: '/equipe', label: 'Equipe', icon: Users }] : []),
+    { to: '/financeiro', label: 'Financeiro', icon: Wallet },
+    ...(isOwner ? [{ to: '/agente', label: 'Agente', icon: Bot }, { to: '/equipe', label: 'Equipe', icon: Users }] : []),
   ]
   const sidebar: Array<{ to: string; label: string; icon: typeof Home; end?: boolean }> = [...main, ...more]
   const moreActive = more.some((m) => pathname.startsWith(m.to))
