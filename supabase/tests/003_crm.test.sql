@@ -14,6 +14,7 @@ begin
   perform rpc_complete_appointment(a, null);
   s := ((today_sp() - ago) + hh) at time zone 'America/Sao_Paulo';
   update appointments set starts_at = s, ends_at = s + duration_min * interval '1 minute' where id = a;
+  update ledger_entries set due_date = (s at time zone 'America/Sao_Paulo')::date where appointment_id = a and voided_at is null;
 end $$;
 
 -- ------------------------------------------------------------ fixtures

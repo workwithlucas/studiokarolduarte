@@ -5,6 +5,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { ImportAppointmentsSheet } from '../features/agenda/ImportAppointmentsSheet'
 import { Button, Chip, ChipRow, EmptyState, Input, Kicker, Skeleton, TabLabel, TabList, useSnackbar } from '../components/ui'
+import { GapMenuSheet } from '../features/agenda/AdjustTime'
 import { AppointmentListRow } from '../features/agenda/AppointmentListRow'
 import { AppointmentSheet, type SheetMode } from '../features/agenda/AppointmentSheet'
 import { BlockDetailSheet, BlockSheet } from '../features/agenda/BlockSheet'
@@ -88,6 +89,7 @@ function AgendaTab() {
   const [overrides, setOverrides] = useState<Record<string, Override>>({})
   const [selected, setSelected] = useState<AppointmentRow | null>(null)
   const [newOpen, setNewOpen] = useState(false)
+  const [gapTarget, setGapTarget] = useState<{ professionalId: string; from: string } | null>(null)
   const [prefill, setPrefill] = useState<Prefill | undefined>()
   const [blockOpen, setBlockOpen] = useState(false)
   const [blockSel, setBlockSel] = useState<Block | null>(null)
@@ -271,8 +273,10 @@ function AgendaTab() {
           appointments={visibleAppts}
           blocks={blocks.data ?? []}
           onSlotTap={(col, minutes) => {
+            const from = isoAtMinutes(col.date, minutes)
             setPrefill({ professionalId: col.professionalId, date: col.date, minutes })
-            setNewOpen(true)
+            if (from) setGapTarget({ professionalId: col.professionalId, from })
+            else setNewOpen(true)
           }}
           onCardTap={setSelected}
           onBlockTap={setBlockSel}
@@ -280,6 +284,14 @@ function AgendaTab() {
         />
       )}
 
+      <GapMenuSheet
+        target={gapTarget}
+        onClose={() => setGapTarget(null)}
+        onNew={() => {
+          setGapTarget(null)
+          setNewOpen(true)
+        }}
+      />
       <NewAppointmentSheet open={newOpen} onClose={() => setNewOpen(false)} prefill={prefill} />
       <AppointmentSheet appointment={selected} onClose={() => setSelected(null)} />
       <BlockSheet open={blockOpen} onClose={() => setBlockOpen(false)} date={date} />

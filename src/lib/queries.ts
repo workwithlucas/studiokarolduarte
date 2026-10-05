@@ -2,6 +2,7 @@
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import type { Database } from '../types/db'
+import { normalizeGap } from './adjust'
 import { addDaysYMD, isoAtMinutes } from './datetime'
 import { rpc, supabase } from './rpc'
 
@@ -234,6 +235,16 @@ export function useAvailability(a: AvailabilityArgs) {
         p_to: a.to,
         p_source: 'staff',
       }),
+  })
+}
+
+/** Free gap starting at `from` (ISO) with the appointments that fit it; null when there is no gap. */
+export function useFreeGap(professionalId: string | null, from: string | null) {
+  return useQuery({
+    queryKey: ['availability', 'gap', professionalId, from],
+    enabled: !!professionalId && !!from,
+    staleTime: 0,
+    queryFn: async () => normalizeGap((await rpc.getFreeGap({ p_professional_id: professionalId!, p_from: from! }))[0]),
   })
 }
 

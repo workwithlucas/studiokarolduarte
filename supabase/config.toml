@@ -397,6 +397,9 @@ verify_jwt = false
 [functions.send-confirmations]
 verify_jwt = false
 
+[functions.notify-reschedule]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

@@ -43,7 +43,15 @@ export function PaymentSheet({ target, onClose, onDone }: { target: PayTarget | 
   )
 }
 
-export function PaymentPanel({ target, onDone, onCancel }: { target: PayTarget; onDone: () => void; onCancel?: () => void }) {
+export function PaymentPanel({
+  target,
+  onDone,
+  onCancel,
+}: {
+  target: PayTarget
+  onDone: (result?: { actualEnd: string | null }) => void
+  onCancel?: () => void
+}) {
   const qc = useQueryClient()
   const snack = useSnackbar()
   // One request id per open: retrying the same sheet can never register twice.
@@ -119,7 +127,7 @@ export function PaymentPanel({ target, onDone, onCancel }: { target: PayTarget; 
         snack.show(expense ? 'Pagamento registrado' : 'Recebimento registrado')
       }
       invalidateAll(qc)
-      onDone()
+      onDone({ actualEnd: iso })
     } catch (e) {
       snack.show(messageOf(e), 'error')
     } finally {
@@ -228,7 +236,7 @@ export function PaymentPanel({ target, onDone, onCancel }: { target: PayTarget; 
                 Concluir, receber depois
               </Button>
             ) : (
-              <Button variant="secondary" disabled={pending} onClick={onDone}>
+              <Button variant="secondary" disabled={pending} onClick={() => onDone()}>
                 {expense ? 'Pagar depois' : 'Receber depois'}
               </Button>
             )}

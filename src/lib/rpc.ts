@@ -98,6 +98,8 @@ export const rpc = {
   cancelAppointment: (a: Args<'rpc_cancel_appointment'>) => call('rpc_cancel_appointment', a),
   markNoShow: (a: Args<'rpc_mark_no_show'>) => call('rpc_mark_no_show', a),
   completeAppointment: (a: Args<'rpc_complete_appointment'>) => call('rpc_complete_appointment', a),
+  adjustAppointmentTime: (a: Args<'rpc_adjust_appointment_time'>) => call('rpc_adjust_appointment_time', a),
+  getFreeGap: (a: Args<'rpc_get_free_gap'>) => call('rpc_get_free_gap', a),
   createBlock: (a: Args<'rpc_create_block'>) => call('rpc_create_block', a),
   deleteBlock: (a: Args<'rpc_delete_block'>) => call('rpc_delete_block', a),
   // finance (owner only)

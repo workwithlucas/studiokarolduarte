@@ -21,8 +21,9 @@ Regras deste roteiro:
 8. Importar agendamentos (passo 19)
 9. Financeiro: comissões e o "a receber" antigo (passo 19b)
 10. Conta da cliente, Tarefa 9: backup, depois `supabase db push` (passo 19c)
-11. Agente em modo *Teste* (passo 20)
-12. Agente em modo *No ar* (passo 21)
+11. Ajuste de horário, Tarefa 10: backup, depois `supabase db push` e deploy de `notify-reschedule` (passo 19d)
+12. Agente em modo *Teste* (passo 20)
+13. Agente em modo *No ar* (passo 21)
 
 Os demais passos (contas, Vault do cron, hospedagem do app, webhook da Z-API) entram no meio dessa ordem, na numeração abaixo. O app precisa estar publicado (passos 14 e 15) antes das importações, porque elas são feitas por ele.
 
@@ -301,6 +302,34 @@ supabase db push
    - *Financeiro* > *+ Lançamento* > *Crédito de cliente*; *Financeiro* > *Análise* > *Contas de clientes*.
 5. Estornar um crédito já usado é bloqueado (*Este crédito já foi usado*): estorne antes o pagamento que usou o crédito.
 6. A Thaís não vê crédito nem dívida de ninguém; nada muda no agente.
+
+**19d. Ajuste de horário (Tarefa 10).** Faça nesta ordem, com o Supabase de produção já vinculado (passo 6). Traz uma migration nova (`20261006120000`): tabela de pedidos de ajuste, coluna de detalhe no log de auditoria, marca de bloqueio forçado, `rpc_adjust_appointment_time`, `rpc_get_free_gap` e as verificações I18 e I19. Nada é renomeado e nenhuma função existente muda de assinatura.
+
+1. **Backup antes de mexer no banco:**
+
+```powershell
+$env:DATABASE_URL = Read-Host "DATABASE_URL de produção"
+```
+
+```powershell
+npm run backup
+```
+
+2. **Aplique a migration:**
+
+```powershell
+supabase db push
+```
+
+3. **Publique a função do aviso à cliente** (usa os mesmos segredos da Z-API; ela confere o login de quem chama):
+
+```powershell
+supabase functions deploy notify-reschedule --no-verify-jwt
+```
+
+4. **Publique o app** (passos 14 e 15).
+5. **Conferir.** Em *Agenda*, abra um agendamento futuro > *Ajustar horário*: digite data (DD/MM/AAAA) e horário (HH:MM, 24h); *Salvar* só liga com valores válidos. A duração não muda e vale qualquer minuto. Se o horário bate com outro agendamento ou bloqueio, o app mostra com quem. Ao concluir um atendimento antes do fim previsto, aparece *Antecipar para HH:MM*; o mesmo atalho está ao tocar num horário livre da grade. Com *Avisar cliente* ligado, a cliente recebe a mensagem fixa pelo WhatsApp (só com a Thaís em *Teste* ou *No ar*, e só se houver telefone). Depois de rodar a verificação de invariantes (`select * from check_invariants();`), não deve voltar nenhuma linha. Se voltar `I19`, o vencimento de algum lançamento em aberto foi editado à mão e difere do dia do agendamento.
+6. A confirmação de amanhã que já foi enviada não é reenviada quando o horário muda; a que ainda não saiu usa o horário novo. A Thaís não muda: a disponibilidade já reflete os horários novos.
 
 **20. Modo Teste com o seu telefone.** No app, *Agente*: em *Teste* adicione o seu número (com DDD) e escolha *Teste*. Mande mensagens do seu celular e confira:
 

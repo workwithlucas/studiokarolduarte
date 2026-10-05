@@ -124,6 +124,38 @@ export type Database = {
           },
         ]
       }
+      appointment_reschedules: {
+        Row: {
+          appointment_id: string
+          created_at: string
+          notified_at: string | null
+          notify: boolean
+          request_id: string
+        }
+        Insert: {
+          appointment_id: string
+          created_at?: string
+          notified_at?: string | null
+          notify?: boolean
+          request_id: string
+        }
+        Update: {
+          appointment_id?: string
+          created_at?: string
+          notified_at?: string | null
+          notify?: boolean
+          request_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "appointment_reschedules_appointment_id_fkey"
+            columns: ["appointment_id"]
+            isOneToOne: false
+            referencedRelation: "appointments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       appointments: {
         Row: {
           action: Database["public"]["Enums"]["service_action"]
@@ -263,6 +295,7 @@ export type Database = {
           actor_id: string | null
           actor_type: string
           at: string
+          detail: Json | null
           entity: string
           entity_id: string | null
           id: number
@@ -272,6 +305,7 @@ export type Database = {
           actor_id?: string | null
           actor_type: string
           at?: string
+          detail?: Json | null
           entity: string
           entity_id?: string | null
           id?: never
@@ -281,6 +315,7 @@ export type Database = {
           actor_id?: string | null
           actor_type?: string
           at?: string
+          detail?: Json | null
           entity?: string
           entity_id?: string | null
           id?: never
@@ -717,6 +752,7 @@ export type Database = {
       schedule_blocks: {
         Row: {
           ends_at: string
+          forced: boolean
           id: string
           professional_id: string | null
           reason: string | null
@@ -724,6 +760,7 @@ export type Database = {
         }
         Insert: {
           ends_at: string
+          forced?: boolean
           id?: string
           professional_id?: string | null
           reason?: string | null
@@ -731,6 +768,7 @@ export type Database = {
         }
         Update: {
           ends_at?: string
+          forced?: boolean
           id?: string
           professional_id?: string | null
           reason?: string | null
@@ -1433,6 +1471,20 @@ export type Database = {
         }
         Returns: string
       }
+      agent_mark_reschedule_notified: {
+        Args: { p_request_id: string }
+        Returns: boolean
+      }
+      agent_pending_reschedule_notice: {
+        Args: { p_request_id: string }
+        Returns: {
+          appointment_id: string
+          client_id: string
+          client_name: string
+          phone: string
+          starts_at: string
+        }[]
+      }
       agent_purge_old: { Args: never; Returns: Json }
       agent_release: { Args: { p_conversation_id: string }; Returns: undefined }
       agent_touch_conversation: {
@@ -1459,6 +1511,15 @@ export type Database = {
           p_opening?: boolean
           p_paid_at?: string
           p_request_id?: string
+        }
+        Returns: string
+      }
+      rpc_adjust_appointment_time: {
+        Args: {
+          p_appointment_id: string
+          p_new_start: string
+          p_notify?: boolean
+          p_request_id: string
         }
         Returns: string
       }
@@ -1664,6 +1725,14 @@ export type Database = {
       }
       rpc_get_client_account: { Args: { p_client_id: string }; Returns: Json }
       rpc_get_client_context: { Args: { p_client_id: string }; Returns: Json }
+      rpc_get_free_gap: {
+        Args: { p_from: string; p_professional_id: string }
+        Returns: {
+          candidates: Json
+          gap_end: string
+          gap_start: string
+        }[]
+      }
       rpc_mark_no_show: {
         Args: { p_appointment_id: string }
         Returns: undefined

@@ -2,15 +2,17 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useAuth } from '../../auth/AuthContext'
 import { Button, Chip, ChipRow, EmptyState, FieldLabel, Input, Pill, Sheet, Skeleton, Textarea, useSnackbar } from '../../components/ui'
+import { endedEarly } from '../../lib/adjust'
 import { formatDayLong, formatTime, todaySP, toSaoPauloISO, ymdOf } from '../../lib/datetime'
 import { formatPhoneBR, toTitlePt } from '../../lib/format'
 import { invalidateAll, useAvailability, useSuggestedProfessionals, type AppointmentRow } from '../../lib/queries'
 import { messageOf, RpcError, rpc } from '../../lib/rpc'
 import { reversePaymentsOfEntry, useFinanceEntry } from '../../lib/financeQueries'
 import { PaymentPanel } from '../finance/PaymentSheet'
+import { AdjustTimePanel, AnteciparPanel } from './AdjustTime'
 import { PackagePill, serviceLine, StatusPill } from './common'
 
-export type SheetMode = 'view' | 'reschedule' | 'cancel' | 'complete' | 'pay'
+export type SheetMode = 'view' | 'reschedule' | 'adjust' | 'antecipar' | 'cancel' | 'complete' | 'pay'
 
 const CANCEL_REASONS = ['Cliente cancelou', 'Reagendou', 'Outro']
 
@@ -44,6 +46,7 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
   // Owner only: the entry behind this appointment (amount, discount, paid). Professionals never query it.
   const entry = useFinanceEntry({ appointmentId: a.id }, isOwner)
   const [hasPayments, setHasPayments] = useState(false)
+  const [early, setEarly] = useState<string | null>(null) // real end of an appointment closed before its planned end
 
   async function reversePayments() {
     if (!entry.data) return
@@ -60,13 +63,21 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
     }
   }
 
-  async function run(fn: () => Promise<unknown>, okMsg: string) {
+  /** After closing: offer "Antecipar" when the real end is before the planned end, else just close. */
+  function afterClose(realEnd: string | null) {
+    if (realEnd && endedEarly(realEnd, a.ends_at)) {
+      setEarly(realEnd)
+      setMode('antecipar')
+    } else onClose()
+  }
+
+  async function run(fn: () => Promise<unknown>, okMsg: string, next: () => void = onClose) {
     setPending(true)
     try {
       await fn()
       invalidateAll(qc)
       snack.show(okMsg)
-      onClose()
+      next()
     } catch (e) {
       if (isOwner && e instanceof RpcError && e.code === 'HAS_PAYMENTS') {
         setHasPayments(true)
@@ -83,10 +94,15 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
 
   if (mode === 'reschedule') return <Reschedule a={a} onBack={() => setMode('view')} onClose={onClose} />
 
+  if (mode === 'adjust') return <AdjustTimePanel a={a} onBack={() => setMode('view')} onClose={onClose} />
+
+  if (mode === 'antecipar' && early)
+    return <AnteciparPanel professionalId={a.professional_id} from={early} onDone={onClose} onSkip={onClose} />
+
   if (mode === 'cancel') return <Cancel a={a} onBack={() => setMode('view')} run={run} pending={pending} />
 
   if (mode === 'complete') {
-    if (!isOwner) return <Complete a={a} day={day} onBack={() => setMode('view')} run={run} pending={pending} />
+    if (!isOwner) return <Complete a={a} day={day} onBack={() => setMode('view')} run={run} afterClose={afterClose} pending={pending} />
     if (!entry.data) return <Skeleton className="h-40" />
     return (
       <PaymentPanel
@@ -101,7 +117,7 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
           discountCents: entry.data.discount_cents,
           paidCents: entry.data.paid_cents,
         }}
-        onDone={onClose}
+        onDone={(r) => afterClose(r?.actualEnd ?? null)}
         onCancel={() => setMode('view')}
       />
     )
@@ -167,6 +183,9 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
           )}
           <Button variant="secondary" onClick={() => setMode('reschedule')}>
             Reagendar
+          </Button>
+          <Button variant="secondary" onClick={() => setMode('adjust')}>
+            Ajustar horário
           </Button>
           <Button variant="secondary" onClick={() => setMode('complete')}>
             Concluir
@@ -331,12 +350,14 @@ function Complete({
   day,
   onBack,
   run,
+  afterClose,
   pending,
 }: {
   a: AppointmentRow
   day: string
   onBack: () => void
-  run: (fn: () => Promise<unknown>, ok: string) => Promise<void>
+  run: (fn: () => Promise<unknown>, ok: string, next?: () => void) => Promise<void>
+  afterClose: (realEnd: string | null) => void
   pending: boolean
 }) {
   // Empty by default: never prefilled with the current time. Empty sends null (keeps the planned end).
@@ -352,7 +373,7 @@ function Complete({
         return
       }
     }
-    void run(() => rpc.completeAppointment({ p_appointment_id: a.id, p_actual_end: iso }), 'Agendamento concluído')
+    void run(() => rpc.completeAppointment({ p_appointment_id: a.id, p_actual_end: iso }), 'Agendamento concluído', () => afterClose(iso))
   }
 
   return (

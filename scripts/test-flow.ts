@@ -240,6 +240,106 @@ async function appointmentImportFlow(maraId: string) {
 }
 
 /** Client account (task 9): deposit, use credit on an appointment, settle debt with Permuta, Mara FORBIDDEN. Starts and ends as Karol. */
+/** Time adjustment (Task 10): as Karol (owner) and as Mara (professional). Starts and ends logged in as Karol. */
+async function adjustFlow(maraId: string, karolId: string) {
+  const today = todaySP()
+  const { data: svcRows } = await supabase.from('services').select('id').eq('name', 'ZZ Ajuste Fluxo')
+  const svcId = await rpc.upsertService({
+    p_id: svcRows?.[0]?.id ?? null,
+    p_name: 'ZZ Ajuste Fluxo',
+    p_category: 'unhas',
+    p_kind: 'standard',
+    p_duration_min: 30,
+    p_price_cents: 5000,
+    p_maintenance_duration_min: null,
+    p_maintenance_price_cents: null,
+    p_cash_price_cents: null,
+    p_active: true,
+  })
+  for (const proId of [maraId, karolId]) {
+    const { data: links } = await supabase.from('professional_services').select('service_id').eq('professional_id', proId)
+    await rpc.setProfessionalServices({ p_professional_id: proId, p_service_ids: [...new Set([...(links ?? []).map((l) => l.service_id), svcId])] })
+  }
+  const tag = String(Date.now() % 100000000).padStart(8, '0')
+  const clientId = await rpc.upsertClient({ p_name: `ZZ Ajuste Fluxo ${tag}`, p_phone: `11 9${tag}`, p_external_code: null, p_birthday: null, p_notes: null })
+
+  const free = async (proId: string) =>
+    rpc.getAvailability({ p_professional_id: proId, p_service_id: svcId, p_action: 'placement', p_addon_ids: [], p_from: addDaysYMD(today, 3), p_to: addDaysYMD(today, 30), p_source: 'staff' })
+  const book = (proId: string, startsAt: string) =>
+    rpc.bookAppointment({
+      p_client_id: clientId,
+      p_professional_id: proId,
+      p_service_id: svcId,
+      p_action: 'placement',
+      p_addon_ids: [],
+      p_starts_at: startsAt,
+      p_source: 'staff',
+      p_idempotency_key: crypto.randomUUID(),
+      p_notes: null,
+      p_client_package_id: null,
+    })
+  const startOf = async (id: string) => (await supabase.from('appointments').select('starts_at,ends_at,duration_min,status').eq('id', id).maybeSingle()).data
+  const dueOf = async (id: string) => (await supabase.from('ledger_entries').select('due_date').eq('appointment_id', id).is('voided_at', null).maybeSingle()).data?.due_date
+  const adjust = (id: string, startsAt: string, requestId = crypto.randomUUID()) =>
+    rpc.adjustAppointmentTime({ p_appointment_id: id, p_new_start: startsAt, p_request_id: requestId, p_notify: false })
+  const ms = (iso: string | null | undefined) => (iso ? new Date(iso).getTime() : NaN)
+
+  const slots = await free(maraId)
+  const byDay = new Map<string, string[]>()
+  for (const s of slots) byDay.set(ymdOf(s.starts_at), [...(byDay.get(ymdOf(s.starts_at)) ?? []), s.starts_at])
+  const days = [...byDay.values()].filter((d) => d.length >= 6)
+  if (days.length < 2) throw new Error('not enough free days for the adjust flow')
+  const first = days[0]![0]!
+  const last = days[0]!.at(-1)!
+  const a1 = await book(maraId, first)
+  const a2 = await book(maraId, last)
+  const kSlot = (await free(karolId))[0]
+  if (!kSlot) throw new Error('no free slot for Karol in the adjust flow')
+  const k1 = await book(karolId, kSlot.starts_at)
+
+  // ---- as Karol (owner)
+  await expectCode('adjust: into an occupied slot -> SLOT_TAKEN', 'SLOT_TAKEN', () => adjust(a2, first))
+  check('adjust: conflict writes nothing', ms((await startOf(a2))?.starts_at) === ms(last))
+  const shifted = new Date(ms(last) + 10 * 60_000).toISOString()
+  await adjust(a2, shifted)
+  const s2 = await startOf(a2)
+  check('adjust: 10-minute shift inside its own span', ms(s2?.starts_at) === ms(shifted) && s2?.duration_min === 30 && ms(s2?.ends_at) === ms(shifted) + 30 * 60_000)
+
+  const req = crypto.randomUUID()
+  const moved = new Date(ms(last) + 20 * 60_000).toISOString()
+  await adjust(a2, moved, req)
+  await adjust(a2, new Date(ms(last) + 40 * 60_000).toISOString(), req)
+  check('adjust: same request id changes once', ms((await startOf(a2))?.starts_at) === ms(moved))
+
+  const gap = (await rpc.getFreeGap({ p_professional_id: maraId, p_from: (await startOf(a1))!.ends_at }))[0]
+  const cands = (gap?.candidates ?? []) as Array<{ appointment_id: string }>
+  check('free gap: a2 is a candidate for the gap after a1', cands.some((c) => c.appointment_id === a2), JSON.stringify(gap))
+  if (gap) {
+    await adjust(a2, gap.gap_start) // Antecipar
+    check('antecipar: a2 starts at the gap start', ms((await startOf(a2))?.starts_at) === ms(gap.gap_start))
+  }
+
+  const otherDay = days[1]![0]!
+  const dueBefore = await dueOf(a2)
+  await adjust(a2, otherDay)
+  check('adjust: another day moves the ledger due_date', (await dueOf(a2)) === ymdOf(otherDay) && dueBefore !== ymdOf(otherDay), `${dueBefore} -> ${await dueOf(a2)}`)
+
+  // ---- as Mara (professional)
+  await login('mara@studio.test')
+  await adjust(a1, new Date(ms(first) + 5 * 60_000).toISOString())
+  check('mara: adjusts her own appointment', ms((await startOf(a1))?.starts_at) === ms(first) + 5 * 60_000)
+  await expectCode("mara: Karol's appointment -> FORBIDDEN", 'FORBIDDEN', () => adjust(k1, new Date(ms(kSlot.starts_at) + 5 * 60_000).toISOString()))
+  const ledgerRead = await supabase.from('v_ledger').select('id').limit(1)
+  check('mara: still no ledger access', (ledgerRead.data ?? []).length === 0)
+
+  // ---- closed appointment cannot move
+  await login('karol@studio.test')
+  await rpc.completeAppointment({ p_appointment_id: a1, p_actual_end: null })
+  await expectCode('adjust: completed -> BAD_TRANSITION', 'BAD_TRANSITION', () => adjust(a1, first))
+  for (const id of [a2, k1]) await rpc.cancelAppointment({ p_appointment_id: id, p_reason: 'Outro' })
+  await expectCode('adjust: cancelled -> BAD_TRANSITION', 'BAD_TRANSITION', () => adjust(a2, first))
+}
+
 async function accountFlow(maraId: string) {
   const today = todaySP()
   const { data: svcRows } = await supabase.from('services').select('id').eq('name', 'ZZ Conta Fluxo')
@@ -653,6 +753,8 @@ async function main() {
 
   const { data: pros } = await supabase.from('professionals').select('id,name')
   const mara = pros?.find((p) => p.name === 'Mara')
+  const karol = pros?.find((p) => p.name === 'Karol Duarte')
+  if (!karol) throw new Error('professional Karol not found')
   if (!mara) throw new Error('professional Mara not found (supabase db reset + npm run dev:users)')
 
   // ---- fixtures (idempotent: reuse by name)
@@ -792,6 +894,8 @@ async function main() {
   await financeFlow(mara.id)
   await login('karol@studio.test')
   await accountFlow(mara.id)
+  await login('karol@studio.test')
+  await adjustFlow(mara.id, karol.id)
 
   // ---- cleanup + invariants
   await login('karol@studio.test')
