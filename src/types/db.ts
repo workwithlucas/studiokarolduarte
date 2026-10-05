@@ -136,6 +136,44 @@ export type Database = {
         }
         Relationships: []
       }
+      agent_sends: {
+        Row: {
+          attached_at: string | null
+          body: string
+          conversation_id: string
+          decision_id: string | null
+          external_id: string | null
+          id: string
+          started_at: string
+        }
+        Insert: {
+          attached_at?: string | null
+          body: string
+          conversation_id: string
+          decision_id?: string | null
+          external_id?: string | null
+          id?: string
+          started_at?: string
+        }
+        Update: {
+          attached_at?: string | null
+          body?: string
+          conversation_id?: string
+          decision_id?: string | null
+          external_id?: string | null
+          id?: string
+          started_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_sends_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "wa_conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       agent_settings: {
         Row: {
           breaker_max_sends: number
@@ -1090,6 +1128,10 @@ export type Database = {
           from_human: boolean
           id: string
           kind: string
+          pause_prev_mode: string | null
+          pause_prev_until: string | null
+          pause_set_until: string | null
+          paused_by_msg: boolean
           purpose: string | null
           sender: string
           sent_at: string
@@ -1104,6 +1146,10 @@ export type Database = {
           from_human?: boolean
           id?: string
           kind: string
+          pause_prev_mode?: string | null
+          pause_prev_until?: string | null
+          pause_set_until?: string | null
+          paused_by_msg?: boolean
           purpose?: string | null
           sender: string
           sent_at?: string
@@ -1118,6 +1164,10 @@ export type Database = {
           from_human?: boolean
           id?: string
           kind?: string
+          pause_prev_mode?: string | null
+          pause_prev_until?: string | null
+          pause_set_until?: string | null
+          paused_by_msg?: boolean
           purpose?: string | null
           sender?: string
           sent_at?: string
@@ -1548,6 +1598,10 @@ export type Database = {
       }
       _time_ok: { Args: { p: string }; Returns: boolean }
       _vault_secret: { Args: { p_name: string }; Returns: string }
+      agent_attach_send: {
+        Args: { p_external_id: string; p_purpose: string; p_send_id: string }
+        Returns: string
+      }
       agent_claim: {
         Args: { p_conversation_id: string; p_lease_seconds: number }
         Returns: boolean
@@ -1597,6 +1651,16 @@ export type Database = {
         Args: { p_request_id: string }
         Returns: boolean
       }
+      agent_match_agent_send: {
+        Args: {
+          p_body: string
+          p_external_id: string
+          p_kind: string
+          p_phone: string
+          p_sent_at?: string
+        }
+        Returns: boolean
+      }
       agent_pending_reschedule_notice: {
         Args: { p_request_id: string }
         Returns: {
@@ -1620,6 +1684,14 @@ export type Database = {
           p_max_age?: number
           p_message_id: string
           p_reason: string
+        }
+        Returns: string
+      }
+      agent_register_send: {
+        Args: {
+          p_body: string
+          p_conversation_id: string
+          p_decision_id: string
         }
         Returns: string
       }

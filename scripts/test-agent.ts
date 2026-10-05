@@ -1056,6 +1056,81 @@ sc('37 scheduled sends re-read the mode: off and shadow never send, test only to
   check('live: sent and stored as an agent message', ok.sent === true && world.sends.length === 1 && (await q("select 1 from wa_messages where body = 'Lembrete' and sender = 'agent'")).length === 1)
 })
 
+// ================================================================ Task 12B: self-pause race
+async function raceThread(n: number) {
+  const phone = P(n)
+  const ing = await q<any>('select * from agent_ingest_inbound($1,$2,$3,$4)', [phone, `RACE-IN-${n}`, 'text', 'oi'])
+  const convId = ing[0].conversation_id as string
+  const reg = async (body: string) => (await q<any>('select agent_register_send($1, gen_random_uuid(), $2) as id', [convId, body]))[0].id as string
+  const attach = async (sendId: string, ext: string) => q('select agent_attach_send($1, $2, $3)', [sendId, ext, 'reply'])
+  const echo = (body: string, id: string) => fromMe(mkDeps(), phone, body, id, { fromApi: true })
+  const msgs = async (ext: string) => q<any>('select sender, from_human from wa_messages where external_id = $1', [ext])
+  return { phone, convId, reg, attach, echo, msgs }
+}
+
+sc('38 echo of an agent send arrives BEFORE the id is attached: not paused, sender agent', async () => {
+  const t = await raceThread(50)
+  const sendId = await t.reg('Oi! Como posso ajudar?')
+  const r = await t.echo('Oi! Como posso ajudar?', 'ECHO-1')
+  check('echo recognised as ours', r.action === 'ignored' && r.reason === 'sent_by_us', JSON.stringify(r))
+  check('thread not paused', (await convOf(t.phone)).mode === 'agent' && (await convOf(t.phone)).human_until === null)
+  check('stored as agent', (await t.msgs('ECHO-1'))[0]?.sender === 'agent')
+  await t.attach(sendId, 'ECHO-1')
+  const rows = await t.msgs('ECHO-1')
+  check('attach keeps one agent row, still not paused', rows.length === 1 && rows[0].sender === 'agent' && (await convOf(t.phone)).mode === 'agent')
+  check('the send carries its provider id', (await q<any>('select external_id from agent_sends where id = $1', [sendId]))[0].external_id === 'ECHO-1')
+})
+
+sc('39 echo arrives AFTER the id is attached: not paused', async () => {
+  const t = await raceThread(51)
+  const sendId = await t.reg('Posso ajudar?')
+  await t.attach(sendId, 'ECHO-2')
+  const r = await t.echo('Posso ajudar?', 'ECHO-2')
+  check('ignored as ours', r.action === 'ignored' && r.reason === 'sent_by_us', JSON.stringify(r))
+  check('not paused, sender agent', (await convOf(t.phone)).mode === 'agent' && (await t.msgs('ECHO-2'))[0].sender === 'agent')
+})
+
+sc('40 staff message with different text 1 s after an agent send: paused', async () => {
+  const t = await raceThread(52)
+  await t.reg('Oi! Como posso ajudar?')
+  const r = await t.echo('Oi, aqui é a Karol, já te respondo', 'STAFF-52')
+  const c = await convOf(t.phone)
+  check('treated as staff and the thread is paused', r.action === 'human' && c.mode === 'human' && c.human_until !== null && (await t.msgs('STAFF-52'))[0].sender === 'staff', JSON.stringify(r))
+  const old = await t.reg('texto antigo')
+  await q("update agent_sends set started_at = now() - interval '2 minutes' where id = $1", [old])
+  const r2 = await t.echo('texto antigo', 'STAFF-52B')
+  check('same text but older than 60 s is staff', r2.action === 'human' && (await t.msgs('STAFF-52B'))[0].sender === 'staff')
+})
+
+sc('41 already stored as staff before the id attached: attach restores the previous pause state', async () => {
+  const t = await raceThread(53)
+  const sendId = await t.reg('Oi! Tudo bem?')
+  const r = await t.echo('oi! tudo bem? ', 'ECHO-3') // text differs (the phone changed it): not matched, stored as staff
+  check('stored as staff and paused', r.action === 'human' && (await convOf(t.phone)).mode === 'human')
+  await t.attach(sendId, 'ECHO-3')
+  const c = await convOf(t.phone)
+  check('attach: sender agent, pause undone', (await t.msgs('ECHO-3'))[0].sender === 'agent' && c.mode === 'agent' && c.human_until === null, JSON.stringify([c.mode, c.human_until]))
+
+  // a pause that was already there (real staff) is not undone
+  const t2 = await raceThread(54)
+  await fromMe(mkDeps(), t2.phone, 'Karol aqui', 'STAFF-54')
+  const before = await convOf(t2.phone)
+  const s2 = await t2.reg('mensagem do sistema')
+  await fromMe(mkDeps(), t2.phone, 'MENSAGEM DO SISTEMA!', 'ECHO-4')
+  await t2.attach(s2, 'ECHO-4')
+  const after = await convOf(t2.phone)
+  check('earlier real staff pause stays', after.mode === 'human' && new Date(after.human_until).getTime() === new Date(before.human_until).getTime(), JSON.stringify([before.human_until, after.human_until]))
+})
+
+sc('42 a real reply registers before Z-API and attaches the provider id', async () => {
+  const phone = P(55)
+  world.script = [() => [text('Oi! Como posso ajudar?')]]
+  const r = await say(phone, 'oi')
+  const rows = await q<any>('select s.external_id, s.attached_at, m.sender, m.decision_id from agent_sends s join wa_messages m on m.external_id = s.external_id where s.conversation_id = $1', [(await convOf(phone)).id])
+  check('sent, send registered and attached, message is ours', r.outcome?.status === 'sent' && rows.length >= 1 && rows.every((x) => x.attached_at && x.sender === 'agent' && x.decision_id), JSON.stringify(rows))
+  check('not paused', (await convOf(phone)).mode === 'agent')
+})
+
 // ---------------------------------------------------------------- run
 async function main() {
   await pgc.connect()

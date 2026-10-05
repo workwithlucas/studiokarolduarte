@@ -40,9 +40,13 @@ export async function handleReceived(deps: Deps, rawBody: string, invokeRun: (co
   if (ev.type === 'from_me') {
     // Every outbound/fromMe message is stored, whatever the mode. It is staff unless it carries this system's send
     // id (an id we stored ourselves). An unknown id sent through the API (another sender) is treated as staff too.
+    // our own send: same provider id, or same thread + same text within 60 s of a registered agent send
+    const ours = () => callRpc<boolean>(deps.db, 'agent_match_agent_send', { p_phone: ev.phone, p_external_id: ev.externalId, p_body: ev.body, p_kind: ev.kind, p_sent_at: ev.sentAt })
     if (await knownExternalId(deps, ev.externalId)) return { action: 'ignored', reason: 'sent_by_us' }
-    await deps.sleep(2_000) // our own send may not have stored its id yet
+    if (await ours()) return { action: 'ignored', reason: 'sent_by_us' }
+    await deps.sleep(2_000) // our own send may not have been registered/attached yet
     if (await knownExternalId(deps, ev.externalId)) return { action: 'ignored', reason: 'sent_by_us' }
+    if (await ours()) return { action: 'ignored', reason: 'sent_by_us' }
     const conversationId = await callRpc<string>(deps.db, 'agent_mark_human', {
       p_phone: ev.phone, p_external_id: ev.externalId, p_kind: ev.kind, p_body: ev.body, p_hours: settings.human_takeover_hours, p_sent_at: ev.sentAt,
     })

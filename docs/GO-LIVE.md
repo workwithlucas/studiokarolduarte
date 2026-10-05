@@ -368,7 +368,7 @@ $env:DATABASE_URL = Read-Host "DATABASE_URL de produção"
 npm run backup
 ```
 
-2. **Aplique a migration** (`20261008120000_agent_hardening.sql`: `phone_key`, `agent_settings`, `agent_decisions`, `sender` nas mensagens, `rpc_agent_set_mode`, I21 e I22). Ela é aditiva e preenche `phone_key` das clientes e das conversas existentes:
+2. **Aplique a migration** (`20261008120000_agent_hardening.sql`: `phone_key`, `agent_settings`, `agent_decisions`, `sender` nas mensagens, `rpc_agent_set_mode`, I21 e I22). Ela é aditiva e preenche `phone_key` das clientes e das conversas existentes. O mesmo `db push` aplica também `20261009120000_self_pause_race.sql` (Tarefa 12B: o eco de uma mensagem enviada pela Thaís não pausa a conversa). A lista de funções abaixo não muda:
 
 ```powershell
 supabase db push

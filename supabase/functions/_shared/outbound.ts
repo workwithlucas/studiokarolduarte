@@ -95,10 +95,10 @@ export async function sendReply(deps: Deps, req: ReplyRequest): Promise<ReplyOut
       }
     }
     try {
+      // registered BEFORE Z-API so a fast webhook echo is recognised as ours; the provider id is attached right after
+      const sendId = await callRpc<string>(db, 'agent_register_send', { p_conversation_id: req.conversationId, p_decision_id: req.decisionId, p_body: req.parts[i]! })
       const r = await sendText(deps.fetch, deps.cfg.zapi, req.phone, req.parts[i]!)
-      await callRpc(db, 'agent_store_outbound', {
-        p_conversation_id: req.conversationId, p_external_id: r.messageId, p_body: req.parts[i]!, p_purpose: req.purpose, p_decision_id: req.decisionId,
-      })
+      await callRpc(db, 'agent_attach_send', { p_send_id: sendId, p_external_id: r.messageId, p_purpose: req.purpose })
       sent.push(req.parts[i]!)
     } catch (e) {
       if (sent.length === 0) throw e
@@ -125,9 +125,8 @@ export interface ScheduledSend {
 export async function sendScheduled(deps: Deps, s: ScheduledSend): Promise<{ sent: boolean; reason?: string; messageRowId?: string | null }> {
   const st = await getGateState(deps.db, s.conversationId, '')
   if (!scheduledSendAllowed(st, s.phone)) return { sent: false, reason: `mode_${st.mode}` }
+  const sendId = await callRpc<string>(deps.db, 'agent_register_send', { p_conversation_id: s.conversationId, p_decision_id: null, p_body: s.text })
   const r = await sendText(deps.fetch, deps.cfg.zapi, s.phone, s.text)
-  const id = await callRpc<string | null>(deps.db, 'agent_store_outbound', {
-    p_conversation_id: s.conversationId, p_external_id: r.messageId, p_body: s.text, p_purpose: s.purpose, p_decision_id: null,
-  })
+  const id = await callRpc<string | null>(deps.db, 'agent_attach_send', { p_send_id: sendId, p_external_id: r.messageId, p_purpose: s.purpose })
   return { sent: true, messageRowId: id }
 }
