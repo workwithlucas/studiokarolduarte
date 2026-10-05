@@ -636,7 +636,7 @@ async function sellPackage(clientId: string, serviceId: string, sessions: number
   const tid = t[0]?.id ?? (await q<{ id: string }>('select rpc_upsert_package_template(null,$1,$2,$3,90,20000,true) as id', [name, serviceId, sessions]))[0]!.id
   return (await q<{ id: string }>('select rpc_sell_package($1,$2) as id', [clientId, tid]))[0]!.id
 }
-const availFor = (serviceId: string) => (c: Ctx) =>
+const availFor = (serviceId: string) => (_c: Ctx) =>
   [tu('get_availability', { professional_id: maraId, service_id: serviceId, action: 'placement', addon_ids: [], from_date: addDays(today(), 1), to_date: addDays(today(), 10) })]
 const firstSlot = (c: Ctx) => c.last('get_availability').days[0].slots[0].starts_at as string
 
