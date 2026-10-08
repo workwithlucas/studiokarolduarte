@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import type { Database } from '../types/db'
 import { normalizeGap } from './adjust'
 import { addDaysYMD, isoAtMinutes } from './datetime'
+import { normalizeSearchRows, type SearchQuery } from './editAppointment'
 import { rpc, supabase } from './rpc'
 
 type Row<T extends keyof Database['public']['Tables']> = Database['public']['Tables'][T]['Row']
@@ -259,4 +260,21 @@ export function useSuggestedProfessionals(clientId: string | null, serviceId: st
         p_service_id: serviceId!,
       }),
   })
+}
+
+/** Agenda search (rpc_agenda_search). Disabled for a query shorter than 2 characters. */
+export function useAgendaSearch(query: SearchQuery | null) {
+  return useQuery({
+    queryKey: ['agenda-search', query?.text ?? null],
+    enabled: !!query,
+    staleTime: 15_000,
+    queryFn: async () => normalizeSearchRows(await rpc.agendaSearch({ p_query: query!.text, p_limit: 20 })),
+  })
+}
+
+/** One appointment with the joins the panel needs (any status). */
+export async function fetchAppointment(id: string): Promise<AppointmentRow | null> {
+  const { data, error } = await supabase.from('appointments').select(APPT_SELECT).eq('id', id).maybeSingle()
+  fail(error)
+  return (data ?? null) as unknown as AppointmentRow | null
 }

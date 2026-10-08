@@ -341,6 +341,90 @@ async function adjustFlow(maraId: string, karolId: string) {
   await expectCode('adjust: cancelled -> BAD_TRANSITION', 'BAD_TRANSITION', () => adjust(a2, first))
 }
 
+async function editFlow(maraId: string, karolId: string) {
+  const today = todaySP()
+  const svc = async (name: string, dur: number, price: number) => {
+    const { data } = await supabase.from('services').select('id').eq('name', name)
+    return rpc.upsertService({
+      p_id: data?.[0]?.id ?? null, p_name: name, p_category: 'unhas', p_kind: 'standard', p_duration_min: dur, p_price_cents: price,
+      p_maintenance_duration_min: null, p_maintenance_price_cents: null, p_cash_price_cents: null, p_active: true,
+    })
+  }
+  const svcA = await svc('ZZ Edição Fluxo A', 30, 5000)
+  const svcB = await svc('ZZ Edição Fluxo B', 60, 9000)
+  for (const proId of [maraId, karolId]) {
+    const { data: links } = await supabase.from('professional_services').select('service_id').eq('professional_id', proId)
+    await rpc.setProfessionalServices({ p_professional_id: proId, p_service_ids: [...new Set([...(links ?? []).map((l) => l.service_id), svcA, svcB])] })
+  }
+  const tag = String(Date.now() % 100000000).padStart(8, '0')
+  const clientId = await rpc.upsertClient({ p_name: `ZZ Edição Fluxo ${tag}`, p_phone: `11 9${tag}`, p_external_code: null, p_birthday: null, p_notes: null })
+  await rpc.upsertClient({ p_name: `ZZ Edição Vazia ${tag}`, p_phone: null, p_external_code: null, p_birthday: null, p_notes: null })
+
+  const free = (proId: string) =>
+    rpc.getAvailability({ p_professional_id: proId, p_service_id: svcA, p_action: 'placement', p_addon_ids: [], p_from: addDaysYMD(today, 3), p_to: addDaysYMD(today, 30), p_source: 'staff' })
+  const book = (proId: string, startsAt: string) =>
+    rpc.bookAppointment({
+      p_client_id: clientId, p_professional_id: proId, p_service_id: svcA, p_action: 'placement', p_addon_ids: [], p_starts_at: startsAt,
+      p_source: 'staff', p_idempotency_key: crypto.randomUUID(), p_notes: null, p_client_package_id: null,
+    })
+  const edit = (id: string, over: { service?: string; action?: string; dur?: number; requestId?: string } = {}) =>
+    rpc.editAppointment({
+      p_appointment_id: id, p_service_id: over.service ?? null, p_service_action: over.action ?? null, p_addon_ids: null,
+      p_duration_min: over.dur ?? null, p_request_id: over.requestId ?? crypto.randomUUID(),
+    })
+  const row = async (id: string) =>
+    (await supabase.from('appointments').select('starts_at,ends_at,duration_min,service_id,price_cents,duration_overridden').eq('id', id).maybeSingle()).data
+  const ms = (iso: string | null | undefined) => (iso ? new Date(iso).getTime() : NaN)
+
+  const slotsM = await free(maraId)
+  const slotsK = await free(karolId)
+  const firstM = slotsM[0]
+  const lastM = slotsM.filter((x) => ymdOf(x.starts_at) === ymdOf(firstM?.starts_at)).at(-1)
+  const firstK = slotsK[0]
+  if (!firstM || !lastM || !firstK) throw new Error('no free slots for the edit flow')
+  const m1 = await book(maraId, firstM.starts_at)
+  const m2 = await book(maraId, lastM.starts_at)
+  const k1 = await book(karolId, firstK.starts_at)
+
+  // ---- as Karol (owner)
+  await edit(m1, { dur: 20 })
+  const r1 = await row(m1)
+  check('edit: shorter duration moves ends_at, keeps starts_at', r1?.duration_min === 20 && ms(r1.ends_at) === ms(firstM.starts_at) + 20 * 60_000 && ms(r1.starts_at) === ms(firstM.starts_at))
+  check('edit: typed duration sets the override flag', r1?.duration_overridden === true)
+  await expectCode('edit: duration 4 -> BAD_TRANSITION', 'BAD_TRANSITION', () => edit(m1, { dur: 4 }))
+  await expectCode('edit: duration 601 -> BAD_TRANSITION', 'BAD_TRANSITION', () => edit(m1, { dur: 601 }))
+  const req = crypto.randomUUID()
+  await edit(m2, { service: svcB, requestId: req })
+  await edit(m2, { dur: 200, requestId: req })
+  const r2 = await row(m2)
+  check('edit: service change follows the new service and the same request id applies once', r2?.service_id === svcB && r2.duration_min === 60 && r2.price_cents === 9000 && r2.duration_overridden === false, JSON.stringify(r2))
+  const entry = (await supabase.from('v_ledger').select('amount_cents,description').eq('appointment_id', m2).is('voided_at', null).maybeSingle()).data
+  check('edit: open ledger entry follows the new service', entry?.amount_cents === 9000 && (entry?.description ?? '').startsWith('ZZ Edição Fluxo B'), JSON.stringify(entry))
+
+  const found = await rpc.agendaSearch({ p_query: `edicao fluxo ${tag}`, p_limit: 20 })
+  check('search (Karol): accent-insensitive name finds all three appointments', found.filter((x) => x.appointment_id).length === 3, JSON.stringify(found))
+  check('search (Karol): digits find the client by phone key', (await rpc.agendaSearch({ p_query: tag, p_limit: 20 })).length >= 3)
+  const empty = await rpc.agendaSearch({ p_query: `edicao vazia ${tag}`, p_limit: 20 })
+  check('search (Karol): client without appointment has null appointment fields', empty.length === 1 && empty[0]?.appointment_id === null)
+  check('search: 1 character returns nothing', (await rpc.agendaSearch({ p_query: 'e', p_limit: 20 })).length === 0)
+
+  // ---- as Mara (professional)
+  await login('mara@studio.test')
+  await edit(m1, { dur: 25 })
+  check('mara: edits the duration of her own appointment', (await row(m1))?.duration_min === 25)
+  await expectCode("mara: Karol's appointment -> FORBIDDEN", 'FORBIDDEN', () => edit(k1, { dur: 25 }))
+  const own = await rpc.agendaSearch({ p_query: `edicao fluxo ${tag}`, p_limit: 20 })
+  check('search (Mara): only her own appointments', own.filter((x) => x.appointment_id).length === 2 && own.every((x) => x.professional_name !== 'Karol Duarte'), JSON.stringify(own))
+  const led = await supabase.from('v_ledger').select('id').limit(1)
+  check('mara: still no ledger access', (led.data ?? []).length === 0)
+
+  // ---- closed appointment
+  await login('karol@studio.test')
+  await rpc.cancelAppointment({ p_appointment_id: m1, p_reason: 'Outro' })
+  await expectCode('edit: cancelled -> BAD_TRANSITION', 'BAD_TRANSITION', () => edit(m1, { dur: 30 }))
+  for (const id of [m2, k1]) await rpc.cancelAppointment({ p_appointment_id: id, p_reason: 'Outro' })
+}
+
 async function accountFlow(maraId: string) {
   const today = todaySP()
   const { data: svcRows } = await supabase.from('services').select('id').eq('name', 'ZZ Conta Fluxo')
@@ -919,6 +1003,8 @@ async function main() {
   await accountFlow(mara.id)
   await login('karol@studio.test')
   await adjustFlow(mara.id, karol.id)
+  await login('karol@studio.test')
+  await editFlow(mara.id, karol.id)
   await login('karol@studio.test')
   await profFinanceFlow(mara.id, karol.id)
 

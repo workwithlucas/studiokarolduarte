@@ -237,6 +237,32 @@ export type Database = {
           },
         ]
       }
+      appointment_edits: {
+        Row: {
+          appointment_id: string
+          created_at: string
+          request_id: string
+        }
+        Insert: {
+          appointment_id: string
+          created_at?: string
+          request_id: string
+        }
+        Update: {
+          appointment_id?: string
+          created_at?: string
+          request_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "appointment_edits_appointment_id_fkey"
+            columns: ["appointment_id"]
+            isOneToOne: false
+            referencedRelation: "appointments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       appointment_reschedules: {
         Row: {
           appointment_id: string
@@ -280,6 +306,7 @@ export type Database = {
           confirmed_at: string | null
           created_at: string
           duration_min: number
+          duration_overridden: boolean
           ends_at: string
           id: string
           idempotency_key: string | null
@@ -302,6 +329,7 @@ export type Database = {
           confirmed_at?: string | null
           created_at?: string
           duration_min: number
+          duration_overridden?: boolean
           ends_at: string
           id?: string
           idempotency_key?: string | null
@@ -324,6 +352,7 @@ export type Database = {
           confirmed_at?: string | null
           created_at?: string
           duration_min?: number
+          duration_overridden?: boolean
           ends_at?: string
           id?: string
           idempotency_key?: string | null
@@ -1750,6 +1779,18 @@ export type Database = {
         }
         Returns: string
       }
+      rpc_agenda_search: {
+        Args: { p_limit?: number; p_query: string }
+        Returns: {
+          appointment_id: string
+          client_id: string
+          client_name: string
+          professional_name: string
+          service_name: string
+          starts_at: string
+          status: Database["public"]["Enums"]["appointment_status"]
+        }[]
+      }
       rpc_agent_dismiss_attention: {
         Args: { p_conversation_id: string }
         Returns: undefined
@@ -1856,6 +1897,17 @@ export type Database = {
         Returns: string
       }
       rpc_delete_block: { Args: { p_block_id: string }; Returns: undefined }
+      rpc_edit_appointment: {
+        Args: {
+          p_addon_ids?: string[]
+          p_appointment_id: string
+          p_duration_min?: number
+          p_request_id?: string
+          p_service_action?: string
+          p_service_id?: string
+        }
+        Returns: string
+      }
       rpc_edit_entry: {
         Args: {
           p_amount_cents: number

@@ -6,6 +6,7 @@ import { useAuth } from '../auth/AuthContext'
 import { ImportAppointmentsSheet } from '../features/agenda/ImportAppointmentsSheet'
 import { Button, Chip, ChipRow, EmptyState, Input, Kicker, Skeleton, TabLabel, TabList, useSnackbar } from '../components/ui'
 import { GapMenuSheet } from '../features/agenda/AdjustTime'
+import { AgendaSearch } from '../features/agenda/AgendaSearch'
 import { AppointmentListRow } from '../features/agenda/AppointmentListRow'
 import { AppointmentSheet, type SheetMode } from '../features/agenda/AppointmentSheet'
 import { BlockDetailSheet, BlockSheet } from '../features/agenda/BlockSheet'
@@ -22,10 +23,12 @@ import {
   todaySP,
   weekdayOf,
   weekStartYMD,
+  ymdOf,
 } from '../lib/datetime'
 import { toTitlePt } from '../lib/format'
 import { gridBounds } from '../lib/grid'
 import {
+  fetchAppointment,
   invalidateAll,
   useAgendaRealtime,
   useAppointments,
@@ -191,11 +194,25 @@ function AgendaTab() {
     }
   }
 
+  /** Search result tapped: jump to that day and open the appointment panel. */
+  async function openFound(id: string, startsAt: string) {
+    const day = ymdOf(startsAt)
+    if (isValidYMD(day)) setDate(day)
+    try {
+      const row = await fetchAppointment(id)
+      if (row) setSelected(row)
+      else snack.show('Agendamento não encontrado.', 'error')
+    } catch (e) {
+      snack.show(messageOf(e), 'error')
+    }
+  }
+
   const step = view === 'dia' ? 1 : 7
   const loading = pros.isLoading || hours.isLoading || appts.isLoading
 
   return (
     <div className="space-y-4">
+      <AgendaSearch onPick={(h) => void openFound(h.appointmentId, h.startsAt)} />
       <div className="flex flex-wrap items-center gap-2">
         <TabList>
           <TabLabel active={view === 'dia'} onClick={() => setView('dia')}>

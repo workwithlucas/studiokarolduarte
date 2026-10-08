@@ -24,6 +24,7 @@ Regras deste roteiro:
 11. Ajuste de horário, Tarefa 10: backup, depois `supabase db push` e deploy de `notify-reschedule` (passo 19d)
 12. Financeiro da profissional, Tarefa 11: backup, depois `supabase db push` (passo 19e)
 13. Endurecimento do agente, Tarefa 12 (incidente de 05/10): backup, `supabase db push`, deploy de todas as funções do agente (passo 19f). **O agente fica *Desligada* até as conferências do 19f passarem.**
+13b. Alterar serviço e duração, busca na agenda, Tarefa 13: backup, depois `supabase db push` (passo 19g)
 14. Agente em modo *Sombra*, depois *Teste* (passo 20)
 15. Agente em modo *No ar* (passo 21)
 
@@ -404,6 +405,27 @@ supabase functions deploy notify-reschedule --no-verify-jwt
    - Em *Clientes*, filtro *Sem telefone*: complete os cadastros que precisam de telefone. O vínculo é por `phone_key` (DDD + últimos 8 dígitos), então o 9º dígito não importa.
 6. **Ajustes opcionais** (já vêm com padrão seguro), na tabela `agent_settings`: `max_inbound_age_minutes = 10`, `breaker_max_sends = 6`, `breaker_window_minutes = 5`. O tempo de pausa da equipe é o `human_takeover_hours` que já existia.
 7. **Só então** vá ao passo 20, começando por *Sombra*. Ao ligar *Teste* ou *No ar*, o app avisa "Thaís responderá apenas mensagens recebidas a partir de agora." e mostra quantas conversas antigas ficam sem resposta automática (quarentena); elas aparecem em *Conversas não respondidas*.
+
+**19g. Alterar serviço/duração e busca na agenda (Tarefa 13).** Faça nesta ordem, com o Supabase de produção já vinculado (passo 6). Traz uma migration nova (`20261010120000`): coluna `appointments.duration_overridden`, tabela `appointment_edits`, `rpc_edit_appointment`, `rpc_agenda_search`, os códigos de erro `SERVICE_LOCKED_PAID` e `PACKAGE_SERVICE_MISMATCH` e a verificação I23. Nada é renomeado. Atenção: `rpc_upsert_service` (mesma assinatura) passa a ajustar a duração dos agendamentos futuros quando a duração do serviço muda, pulando os que tiveram a duração digitada à mão. Nenhuma função de borda muda.
+
+1. **Backup antes de mexer no banco:**
+
+```powershell
+$env:DATABASE_URL = Read-Host "DATABASE_URL de produção"
+```
+
+```powershell
+npm run backup
+```
+
+2. **Aplique a migration:**
+
+```powershell
+supabase db push
+```
+
+3. **Publique o app** (passos 14 e 15).
+4. **Conferir.** Em *Agenda*, a barra de busca no topo acha cliente por nome (sem acento, maiúscula ou minúscula, parte do nome) ou por telefone; toque no resultado leva ao dia e abre o agendamento. Em um agendamento, *Alterar serviço* troca serviço, ação e adicionais e o campo *Duração* aceita qualquer minuto de 5 a 600, mostrando "Termina às HH:MM". Se o lançamento já tem pagamento, só a duração muda ("Estorne o pagamento antes de alterar o serviço"). Depois de rodar `select * from check_invariants();`, não deve voltar nenhuma linha. Se voltar `I23`, o valor de um lançamento em aberto difere do preço do agendamento (por exemplo, valor editado à mão em *Financeiro*).
 
 **20. Modo Teste com o seu telefone.** No app, *Agente*: em *Teste* adicione o seu número (com DDD) e escolha *Teste*. Mande mensagens do seu celular e confira:
 

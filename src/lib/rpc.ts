@@ -35,6 +35,8 @@ export const ERROR_MESSAGES = {
   CREDIT_IN_USE: 'Este crédito já foi usado; estorne os usos primeiro.',
   METHOD_NOT_ALLOWED: 'Forma de pagamento não permitida aqui.',
   RANGE_TOO_LARGE: 'O período não pode passar de 366 dias.',
+  SERVICE_LOCKED_PAID: 'Estorne o pagamento antes de alterar o serviço.',
+  PACKAGE_SERVICE_MISMATCH: 'Este serviço não é coberto pelo pacote do agendamento.',
 } as const
 
 export type ErrorCode = keyof typeof ERROR_MESSAGES
@@ -102,6 +104,8 @@ export const rpc = {
   completeAppointment: (a: Args<'rpc_complete_appointment'>) => call('rpc_complete_appointment', a),
   adjustAppointmentTime: (a: Args<'rpc_adjust_appointment_time'>) => call('rpc_adjust_appointment_time', a),
   getFreeGap: (a: Args<'rpc_get_free_gap'>) => call('rpc_get_free_gap', a),
+  editAppointment: (a: Args<'rpc_edit_appointment'>) => call('rpc_edit_appointment', a),
+  agendaSearch: (a: Args<'rpc_agenda_search'>) => call('rpc_agenda_search', a),
   createBlock: (a: Args<'rpc_create_block'>) => call('rpc_create_block', a),
   deleteBlock: (a: Args<'rpc_delete_block'>) => call('rpc_delete_block', a),
   // finance (professional: own totals only)

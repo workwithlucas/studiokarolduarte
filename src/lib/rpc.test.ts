@@ -29,14 +29,16 @@ const CODES: ErrorCode[] = [
   'CREDIT_IN_USE',
   'METHOD_NOT_ALLOWED',
   'RANGE_TOO_LARGE',
+  'SERVICE_LOCKED_PAID',
+  'PACKAGE_SERVICE_MISMATCH',
 ]
 
 afterEach(() => vi.restoreAllMocks())
 
 describe('error mapping', () => {
-  it('covers all 27 codes', () => {
+  it('covers all 29 codes', () => {
     expect(Object.keys(ERROR_MESSAGES).sort()).toEqual([...CODES].sort())
-    expect(CODES).toHaveLength(27)
+    expect(CODES).toHaveLength(29)
   })
 
   it.each(CODES)('%s maps to its pt-BR message', async (code) => {

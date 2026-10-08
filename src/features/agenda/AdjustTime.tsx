@@ -30,7 +30,7 @@ export class LocalBoundary extends Component<{ children: ReactNode; onBack?: () 
 }
 
 /** The rpc.ts mapping, plus the database detail for conflicts (it names the client and the time). */
-function errorText(e: unknown): string {
+export function errorText(e: unknown): string {
   if (e instanceof RpcError && (e.code === 'SLOT_TAKEN' || e.code === 'BLOCKED') && e.detail) return e.detail
   return messageOf(e)
 }

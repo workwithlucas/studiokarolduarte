@@ -10,9 +10,10 @@ import { messageOf, RpcError, rpc } from '../../lib/rpc'
 import { reversePaymentsOfEntry, useFinanceEntry } from '../../lib/financeQueries'
 import { PaymentPanel } from '../finance/PaymentSheet'
 import { AdjustTimePanel, AnteciparPanel } from './AdjustTime'
+import { EditAppointmentPanel } from './EditAppointment'
 import { PackagePill, serviceLine, StatusPill } from './common'
 
-export type SheetMode = 'view' | 'reschedule' | 'adjust' | 'antecipar' | 'cancel' | 'complete' | 'pay'
+export type SheetMode = 'view' | 'reschedule' | 'adjust' | 'edit' | 'antecipar' | 'cancel' | 'complete' | 'pay'
 
 const CANCEL_REASONS = ['Cliente cancelou', 'Reagendou', 'Outro']
 
@@ -95,6 +96,8 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
   if (mode === 'reschedule') return <Reschedule a={a} onBack={() => setMode('view')} onClose={onClose} />
 
   if (mode === 'adjust') return <AdjustTimePanel a={a} onBack={() => setMode('view')} onClose={onClose} />
+
+  if (mode === 'edit') return <EditAppointmentPanel a={a} onBack={() => setMode('view')} onClose={onClose} />
 
   if (mode === 'antecipar' && early)
     return <AnteciparPanel professionalId={a.professional_id} from={early} onDone={onClose} onSkip={onClose} />
@@ -187,6 +190,9 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
           <Button variant="secondary" onClick={() => setMode('adjust')}>
             Ajustar horário
           </Button>
+          <Button variant="secondary" onClick={() => setMode('edit')}>
+            Alterar serviço
+          </Button>
           <Button variant="secondary" onClick={() => setMode('complete')}>
             Concluir
           </Button>
@@ -202,7 +208,14 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
           </Button>
         </div>
       ) : (
-        <p className="text-help">Este agendamento está encerrado e não pode ser alterado.</p>
+        <div className="space-y-3 pt-2">
+          <p className="text-help">Este agendamento está encerrado e não pode ser alterado.</p>
+          {a.status === 'completed' && (
+            <Button variant="secondary" onClick={() => setMode('edit')}>
+              Alterar serviço
+            </Button>
+          )}
+        </div>
       )}
     </div>
   )
