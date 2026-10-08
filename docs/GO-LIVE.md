@@ -425,7 +425,7 @@ supabase db push
 ```
 
 3. **Publique o app** (passos 14 e 15).
-4. **Conferir.** Em *Agenda*, a barra de busca no topo acha cliente por nome (sem acento, maiúscula ou minúscula, parte do nome) ou por telefone; toque no resultado leva ao dia e abre o agendamento. Em um agendamento, *Alterar serviço* troca serviço, ação e adicionais e o campo *Duração* aceita qualquer minuto de 5 a 600, mostrando "Termina às HH:MM". Se o lançamento já tem pagamento, só a duração muda ("Estorne o pagamento antes de alterar o serviço"). Depois de rodar `select * from check_invariants();`, não deve voltar nenhuma linha. Se voltar `I23`, o valor de um lançamento em aberto difere do preço do agendamento (por exemplo, valor editado à mão em *Financeiro*).
+4. **Conferir.** Em *Agenda*, a barra de busca no topo acha cliente por nome (sem acento, maiúscula ou minúscula, parte do nome) ou por telefone; toque no resultado leva ao dia e abre o agendamento. Em um agendamento, *Alterar serviço* troca serviço, ação e adicionais e o campo *Duração* aceita qualquer minuto de 5 a 600, mostrando "Termina às HH:MM". Se o lançamento já tem pagamento, só a duração muda ("Estorne o pagamento antes de alterar o serviço"). Depois de rodar `select * from check_invariants();`, não deve voltar nenhuma linha. Se voltar `I23`, o valor de um lançamento em aberto difere do preço do agendamento sem que a dona tenha editado o valor à mão (lançamentos com valor editado em *Financeiro* são ignorados por essa verificação). Aplique também a migration `20261011120000` (Tarefa 13B), que traz essa regra.
 
 **20. Modo Teste com o seu telefone.** No app, *Agente*: em *Teste* adicione o seu número (com DDD) e escolha *Teste*. Mande mensagens do seu celular e confira:
 
