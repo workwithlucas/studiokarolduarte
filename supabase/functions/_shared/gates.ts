@@ -1,8 +1,25 @@
 // Code gates ("the model proposes, code disposes"). Pure functions, unit tested.
 import { parseInstant, tsKey } from './time.ts'
+import type { OptionRef } from './reply.ts'
 import type { Conversation, PendingAction } from './types.ts'
 
 export const PENDING_TTL_MS = 30 * 60_000
+export const OPTIONS_TTL_MS = 30 * 60_000
+
+export type OptionResult = { ok: true; option: OptionRef } | { ok: false; code: 'OPTION_EXPIRED' | 'INVALID_ARGUMENT'; message: string }
+
+/**
+ * propose_* takes an option TOKEN, never a timestamp: the professional, service, action and start come from what
+ * get_availability stored for this conversation, and only if that was no more than 30 minutes ago.
+ */
+export function resolveOption(conv: Pick<Conversation, 'last_options' | 'options_at'>, token: unknown, nowMs: number): OptionResult {
+  const at = parseInstant(conv.options_at)
+  if (!conv.last_options?.length || at === null || nowMs - at > OPTIONS_TTL_MS || nowMs < at) {
+    return { ok: false, code: 'OPTION_EXPIRED', message: 'As opções expiraram. Chame get_availability de novo.' }
+  }
+  const o = typeof token === 'string' ? conv.last_options.find((x) => x.token === token.trim().replace(/^\{|\}$/g, '')) : undefined
+  return o ? { ok: true, option: o } : { ok: false, code: 'INVALID_ARGUMENT', message: 'option inválida: use um token devolvido por get_availability.' }
+}
 
 export type GateResult = { ok: true } | { ok: false; error: 'NO_PENDING' | 'EXPIRED' | 'NOT_PRESENTED' | 'NO_CLIENT_REPLY'; message: string }
 

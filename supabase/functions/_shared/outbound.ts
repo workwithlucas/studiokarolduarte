@@ -45,6 +45,13 @@ export interface ReplyRequest {
   action: Extract<DecisionAction, 'replied' | 'handoff'>
   reason: string
   decisionId: string
+  /** Stored on the outbound wa_messages row: which tools ran and what the reply guard did. */
+  meta?: ReplyMeta
+}
+
+export interface ReplyMeta {
+  tools: Array<{ name: string; ok: boolean; code?: string }>
+  guard: 'none' | 'regenerated' | 'fallback'
 }
 
 export type ReplyOutcome =
@@ -98,8 +105,13 @@ export async function sendReply(deps: Deps, req: ReplyRequest): Promise<ReplyOut
       // registered BEFORE Z-API so a fast webhook echo is recognised as ours; the provider id is attached right after
       const sendId = await callRpc<string>(db, 'agent_register_send', { p_conversation_id: req.conversationId, p_decision_id: req.decisionId, p_body: req.parts[i]! })
       const r = await sendText(deps.fetch, deps.cfg.zapi, req.phone, req.parts[i]!)
-      await callRpc(db, 'agent_attach_send', { p_send_id: sendId, p_external_id: r.messageId, p_purpose: req.purpose })
+      const rowId = await callRpc<string | null>(db, 'agent_attach_send', { p_send_id: sendId, p_external_id: r.messageId, p_purpose: req.purpose })
       sent.push(req.parts[i]!)
+      if (req.meta && rowId) {
+        // best effort: the message is already out, a failed audit note must not turn it into an error
+        const upd = await db.from('wa_messages').update({ meta: req.meta }).eq('id', rowId)
+        if (upd.error) deps.log('meta_store_failed', { error: upd.error.message })
+      }
     } catch (e) {
       if (sent.length === 0) throw e
       deps.log('partial_send', { conversation: req.conversationId, sent: sent.length, error: msg(e) })

@@ -8,8 +8,9 @@ import { runAgent, HANDOFF_TEXT } from '../supabase/functions/_shared/agent.ts'
 import { runConfirmations } from '../supabase/functions/_shared/confirmations.ts'
 import { executeTool, type ToolCtx } from '../supabase/functions/_shared/tools.ts'
 import { runSweep } from '../supabase/functions/_shared/sweep.ts'
-import { addDays, parseInstant, spParts } from '../supabase/functions/_shared/time.ts'
-import { normalizePhone, phoneKey } from '../supabase/functions/_shared/phone.ts'
+import { addDays, parseInstant, slotLabel, spParts } from '../supabase/functions/_shared/time.ts'
+import { firstName, normalizePhone, phoneKey } from '../supabase/functions/_shared/phone.ts'
+import { FALLBACK_TEXT } from '../supabase/functions/_shared/reply.ts'
 import { getConversation, loadSettings } from '../supabase/functions/_shared/db.ts'
 import { handleReceived } from '../supabase/functions/_shared/webhook.ts'
 import type { Db, Deps } from '../supabase/functions/_shared/types.ts'
@@ -144,6 +145,9 @@ let milenaId = ''
 let svcId = ''
 let addonId = ''
 const today = () => spParts(Date.now()).ymd
+/** get_availability for Mara and the fixture service; the model only ever sees tokens and labels. */
+const availArgs = (extra: Record<string, unknown> = {}) => ({ professional_id: maraId, service_id: svcId, action: 'placement', addon_ids: [], from_date: addDays(today(), 1), to_date: addDays(today(), 10), ...extra })
+const optionOf = (c: { last: (n: string) => any }, i = 0) => c.last('get_availability').options[i].token as string
 
 async function ensureFixtures() {
   const pros = await q<{ id: string; name: string }>("select id, name from professionals where name in ('Mara','Milena')")
@@ -244,25 +248,32 @@ const sc = (name: string, fn: () => Promise<void>) => scenarios.push([name, fn])
 
 sc('1 new client books', async () => {
   const phone = P(1)
-  const pick = (c: Ctx) => c.last('get_availability').days[0].slots[0].starts_at as string
   const clientOf = (c: Ctx) => c.last('register_client').client_id as string
   world.script = [
     () => [tu('lookup_client')],
     () => [tu('register_client', { name: 'ZZA Ana Nova' })],
     () => [tu('list_services')],
     () => [tu('suggest_professionals', { service_id: svcId })],
-    () => [tu('get_availability', { professional_id: maraId, service_id: svcId, action: 'placement', addon_ids: [addonId], from_date: addDays(today(), 1), to_date: addDays(today(), 10) })],
-    (c) => [tu('propose_booking', { client_id: clientOf(c), professional_id: maraId, service_id: svcId, action: 'placement', addon_ids: [addonId], starts_at: pick(c) })],
-    () => [text('Fica assim: manicure, com a Mara. Posso confirmar?')],
+    () => [tu('get_availability', availArgs({ addon_ids: [addonId] }))],
+    (c) => [tu('propose_booking', { client_id: clientOf(c), option: optionOf(c), addon_ids: [addonId] })],
+    () => [text('Fica assim: {resumo} Posso confirmar?')],
   ]
   const r1 = await say(phone, 'Oi, quero fazer as unhas')
   check('run 1 sent', r1.outcome?.status === 'sent', String(r1.outcome?.status))
   const c1 = await convOf(phone)
   check('pending stored and presented', c1.pending_action?.type === 'book' && !!c1.pending_action.presented_baseline)
+  const opt1 = c1.last_options[0]
+  const label1 = slotLabel(opt1.starts_at, Date.now())
+  check('summary built by code reached the client (service, professional, label, price)', sentTo(phone)[0]?.message.includes(`com Mara ${label1}`) === true && sentTo(phone)[0]?.message.includes('R$ 95,00') === true, sentTo(phone)[0]?.message)
+  check('options stored with a timestamp', c1.last_options.length >= 1 && c1.options_at !== null && opt1.token === 'o1' && opt1.professional_id === maraId)
   check('no appointment before the client says yes', (await q('select 1 from appointments a join clients c on c.id=a.client_id where c.name like $1', ['ZZA Ana%'])).length === 0)
-  world.script = [() => [tu('confirm_pending')], () => [text('Pronto! Te espero. Se precisar remarcar é só me falar.')]]
+  world.script = [() => [tu('confirm_pending')], () => [text('Pronto! Te espero às 10:00. Já está marcado.')]]
   const r2 = await say(phone, 'sim')
   check('run 2 sent', r2.outcome?.status === 'sent', String(r2.outcome?.status))
+  check('reply is the code template with the exact label (model text dropped)', sentTo(phone)[1]?.message === `Pronto, ${firstName('ZZA Ana Nova')}! Agendei ZZA Manicure com Mara ${label1}.`, sentTo(phone)[1]?.message)
+  check('address line from the KB follows', sentTo(phone)[2]?.message.startsWith('Endereço: R. José Siqueira') === true, sentTo(phone)[2]?.message)
+  const meta = (await q<any>("select meta from wa_messages m join wa_conversations c on c.id = m.conversation_id where c.phone_e164 = $1 and direction = 'out' order by m.created_at desc limit 1", [phone]))[0]?.meta
+  check('meta stored on the outbound row (tools + guard)', meta?.guard === 'none' && meta.tools.some((t: any) => t.name === 'confirm_pending' && t.ok === true), JSON.stringify(meta))
   const appts = await q<any>("select a.*, (select count(*) from ledger_entries l where l.appointment_id=a.id and l.voided_at is null)::int as live from appointments a join clients c on c.id=a.client_id where c.name like 'ZZA Ana%'")
   check('one appointment booked by the agent', appts.length === 1 && appts[0].source === 'agent' && appts[0].price_cents === 9500 && appts[0].duration_min === 75, JSON.stringify(appts.map((a) => [a.source, a.price_cents, a.duration_min])))
   check('exactly one live ledger entry', appts[0]?.live === 1)
@@ -338,17 +349,28 @@ sc('5 reschedule keeps the same ledger entry', async () => {
   const [s1, s2] = await slots(maraId)
   const apptId = await bookStaff(cid, maraId, s1!)
   const before = await q<any>('select id, due_date from ledger_entries where appointment_id=$1 and voided_at is null', [apptId])
-  const target = (await slots(maraId, 1, 12)).find((s) => s !== s1 && s !== s2) ?? s2!
+  void s2
   world.script = [
     () => [tu('lookup_client')],
-    () => [tu('list_my_appointments')],
-    () => [tu('propose_reschedule', { appointment_id: apptId, new_starts_at: target })],
-    () => [text('Posso remarcar para o novo horário?')],
+    (c) => {
+      const l = c.last('lookup_client').context
+      check('context appointments carry labels, not timestamps', l.next_appointments[0]?.label === slotLabel(s1!, Date.now()) && !/starts_at|T\d\d:\d\d:\d\d/.test(JSON.stringify(l)), JSON.stringify(l.next_appointments))
+      return [tu('list_my_appointments')]
+    },
+    (c) => {
+      const a = c.last('list_my_appointments').appointments[0]
+      check('list_my_appointments returns {id, label, service, professional}', Object.keys(a).sort().join() === 'id,label,professional,service' && a.label === slotLabel(s1!, Date.now()), JSON.stringify(a))
+      return [tu('get_availability', availArgs({ from_date: addDays(today(), 1), to_date: addDays(today(), 12) }))]
+    },
+    (c) => [tu('propose_reschedule', { appointment_id: apptId, option: optionOf(c) })],
+    () => [text('Posso remarcar? {resumo}')],
   ]
   await say(phone, 'preciso remarcar')
+  const target = (await convOf(phone)).last_options[0].starts_at.toString()
   world.script = [() => [tu('confirm_pending')], () => [text('Remarcado! Se precisar mudar é só me falar.')]]
   const r = await say(phone, 'pode ser')
   check('reply sent', r.outcome?.status === 'sent')
+  check('reschedule reply is the code template', sentTo(phone).at(-2)?.message === `Remarquei seu ZZA Manicure para ${slotLabel(target, Date.now())}.`, JSON.stringify(sentTo(phone).slice(-3).map((x) => x.message)))
   const [a] = await apptsOf(cid)
   check('appointment moved', parseInstant(a.starts_at.toISOString()) === parseInstant(target), `${a.starts_at.toISOString()} vs ${target}`)
   const after = await q<any>('select id, due_date from ledger_entries where appointment_id=$1 and voided_at is null', [apptId])
@@ -360,11 +382,13 @@ sc('5 reschedule keeps the same ledger entry', async () => {
 sc('6 cancel voids the ledger entry', async () => {
   const phone = P(6)
   const cid = await newClient('ZZA Cida Cancela', phone)
-  const apptId = await bookStaff(cid, maraId, (await slots(maraId))[0]!)
-  world.script = [() => [tu('lookup_client')], () => [tu('propose_cancel', { appointment_id: apptId })], () => [text('Quer mesmo cancelar?')]]
+  const s0 = (await slots(maraId))[0]!
+  const apptId = await bookStaff(cid, maraId, s0)
+  world.script = [() => [tu('lookup_client')], () => [tu('propose_cancel', { appointment_id: apptId })], () => [text('{resumo} Quer mesmo cancelar?')]]
   await say(phone, 'quero cancelar')
   world.script = [() => [tu('confirm_pending')], () => [text('Cancelado. Quando quiser é só chamar.')]]
   await say(phone, 'sim')
+  check('cancel reply is the code template', sentTo(phone).at(-1)?.message === `Cancelei seu ZZA Manicure de ${slotLabel(s0, Date.now())}. Se quiser remarcar é só me falar.`, sentTo(phone).at(-1)?.message)
   const [a] = await apptsOf(cid)
   check('appointment cancelled with reason', a.status === 'cancelled' && a.cancel_reason === 'Cliente cancelou pelo WhatsApp', a.status)
   const l = await q<any>('select voided_at from ledger_entries where appointment_id=$1', [apptId])
@@ -404,7 +428,6 @@ sc('8 shared phone: choose_client and register_client', async () => {
   const phone = P(9)
   const mae = await newClient('ZZA Marta Mae', phone)
   const filha = await newClient('ZZA Julia Filha', phone)
-  const [s1] = await slots(maraId)
   world.script = [
     () => [tu('lookup_client')],
     (c) => {
@@ -412,7 +435,7 @@ sc('8 shared phone: choose_client and register_client', async () => {
       return [tu('choose_client', { client_id: filha })]
     },
     () => [tu('register_client', { name: 'ZZA Prima Nova' })],
-    () => [tu('propose_booking', { client_id: mae, professional_id: maraId, service_id: svcId, action: 'placement', addon_ids: [], starts_at: s1 })],
+    () => [tu('propose_booking', { client_id: mae, option: 'o1' })],
     (c) => {
       check('a client not chosen is refused', c.last('propose_booking').ok === false && c.last('propose_booking').error === 'NOT_ALLOWED', JSON.stringify(c.last('propose_booking')))
       return [tu('choose_client', { client_id: '00000000-0000-4000-8000-000000000000' })]
@@ -455,12 +478,13 @@ sc('9 send-confirmations, then "sim" confirms', async () => {
   ]
   await say(phone, 'sim')
   check('appointment confirmed', (await apptsOf(cid))[0].status === 'confirmed')
+  check('attendance reply is the code template', sentTo(phone).at(-1)?.message === `Confirmado! Te esperamos ${slotLabel(`${tomorrow}T10:00:00-03:00`, Date.now())}.`, sentTo(phone).at(-1)?.message)
   // an appointment that is not awaiting confirmation cannot be confirmed by the model
   const other = await newClient('ZZA Nina Outra', P(11))
   const otherAppt = await bookStaff(other, maraId, (await slots(maraId, 2, 14))[0]!)
   world.script = [() => [tu('lookup_client')], () => [tu('confirm_attendance', { appointment_id: otherAppt })], (c) => {
     check('confirm_attendance refused outside wa_confirmations', c.last('confirm_attendance').error === 'NOT_ALLOWED')
-    return [text('Ok!')]
+    return [text('Esse horário não está aguardando confirmação.')]
   }]
   await say(phone, 'confirma o outro também')
 })
@@ -558,23 +582,23 @@ sc('15 SLOT_TAKEN recovery', async () => {
   const phone = P(19)
   const cid = await newClient('ZZA Sara Slot', phone)
   const rival = await newClient('ZZA Rival', P(20))
-  const [s1, s2, s3] = await slots(maraId)
-  const propose = (start: string, cidv = cid) => tu('propose_booking', { client_id: cidv, professional_id: maraId, service_id: svcId, action: 'placement', addon_ids: [], starts_at: start })
-  world.script = [() => [tu('lookup_client')], () => [propose(s1!)], () => [text('Posso confirmar o primeiro horário?')]]
+  const [s1] = await slots(maraId)
+  const propose = (c: Ctx) => tu('propose_booking', { client_id: cid, option: optionOf(c) })
+  world.script = [() => [tu('lookup_client')], () => [tu('get_availability', availArgs())], (c) => [propose(c)], () => [text('{resumo} Posso confirmar?')]]
   await say(phone, 'quero manicure')
   await bookStaff(rival, maraId, s1!) // someone takes the slot meanwhile
   world.script = [
     () => [tu('confirm_pending')],
     (c) => {
       check('SLOT_TAKEN returned as a structured error', c.last('confirm_pending').ok === false && c.last('confirm_pending').error === 'SLOT_TAKEN', JSON.stringify(c.last('confirm_pending')))
-      return [tu('get_availability', { professional_id: maraId, service_id: svcId, action: 'placement', from_date: addDays(today(), 1), to_date: addDays(today(), 10) })]
+      return [tu('get_availability', availArgs())]
     },
     (c) => {
-      const flat = c.last('get_availability').days.flatMap((d: any) => d.slots.map((x: any) => x.starts_at))
-      check('taken slot no longer offered', !flat.includes(s1))
-      return [propose(flat.find((x: string) => x === s2 || x === s3) ?? flat[0])]
+      const labels = c.last('get_availability').options.map((o: any) => o.label)
+      check('taken slot no longer offered', !labels.includes(slotLabel(s1!, Date.now())) && labels.length > 0)
+      return [propose(c)]
     },
-    () => [text('Esse horário acabou de ser ocupado. Que tal este outro?')],
+    () => [text('Esse horário acabou de ser ocupado. Que tal este outro? {resumo}')],
   ]
   await say(phone, 'sim')
   world.script = [() => [tu('confirm_pending')], () => [text('Pronto! Se precisar remarcar é só me falar.')]]
@@ -586,14 +610,14 @@ sc('15 SLOT_TAKEN recovery', async () => {
 sc('16 confirm_pending without a client reply is refused', async () => {
   const phone = P(21)
   const cid = await newClient('ZZA Paula Pendente', phone)
-  const [s1] = await slots(maraId)
   world.script = [
     () => [tu('lookup_client')],
-    () => [tu('propose_booking', { client_id: cid, professional_id: maraId, service_id: svcId, action: 'placement', addon_ids: [], starts_at: s1 })],
+    () => [tu('get_availability', availArgs())],
+    (c) => [tu('propose_booking', { client_id: cid, option: optionOf(c) })],
     () => [tu('confirm_pending')],
     (c) => {
       check('same-run confirm refused (summary not presented)', c.last('confirm_pending').error === 'NOT_PRESENTED', JSON.stringify(c.last('confirm_pending')))
-      return [text('Fica assim, posso confirmar?')]
+      return [text('{resumo} Posso confirmar?')]
     },
   ]
   await say(phone, 'quero manicure')
@@ -649,11 +673,9 @@ async function sellPackage(clientId: string, serviceId: string, sessions: number
   const tid = t[0]?.id ?? (await q<{ id: string }>('select rpc_upsert_package_template(null,$1,$2,$3,90,20000,true) as id', [name, serviceId, sessions]))[0]!.id
   return (await q<{ id: string }>('select rpc_sell_package($1,$2) as id', [clientId, tid]))[0]!.id
 }
-const availFor = (serviceId: string) => (_c: Ctx) =>
-  [tu('get_availability', { professional_id: maraId, service_id: serviceId, action: 'placement', addon_ids: [], from_date: addDays(today(), 1), to_date: addDays(today(), 10) })]
-const firstSlot = (c: Ctx) => c.last('get_availability').days[0].slots[0].starts_at as string
+const availFor = (serviceId: string) => (_c: Ctx) => [tu('get_availability', availArgs({ service_id: serviceId }))]
 
-sc('19 package booking consumes a session, ledger amount 0', async () => {
+sc('19 package booking is the default: summary line, ledger amount 0, session consumed', async () => {
   const phone = P(23)
   const cid = await newClient('ZZA Pat Pacote', phone)
   const pkgId = await sellPackage(cid, svcId, 3)
@@ -661,18 +683,19 @@ sc('19 package booking consumes a session, ledger amount 0', async () => {
     () => [tu('lookup_client')],
     (c) => {
       const p = c.last('lookup_client').context.active_packages
-      check('active package in context', p.length === 1 && p[0].remaining === 3)
+      check('active package in context, expiry as a token (no raw date)', p.length === 1 && p[0].remaining === 3 && p[0].vence_em === '{p1_vence}' && !/20\d\d-\d\d-\d\d/.test(JSON.stringify(p)), JSON.stringify(p))
       return availFor(svcId)(c)
     },
-    (c) => [tu('propose_booking', { client_id: cid, professional_id: maraId, service_id: svcId, action: 'placement', addon_ids: [], starts_at: firstSlot(c), use_package: true })],
+    (c) => [tu('propose_booking', { client_id: cid, option: optionOf(c) })],
     (c) => {
       const s = c.last('propose_booking').summary
-      check('summary states package use and no price', /sessão do seu pacote \(restam 2\)/.test(s.pacote) && s.valor === undefined)
-      return [text('Vai usar uma sessão do seu pacote (restam 2). Posso confirmar?')]
+      check('summary states package use and no price', /sessão do seu pacote \(restam 2\)/.test(s.pacote) && s.valor === undefined, JSON.stringify(s))
+      return [text('{resumo} Posso confirmar?')]
     },
   ]
   await say(phone, 'quero marcar manicure')
-  check('client_package_id stored in pending', (await convOf(phone)).pending_action?.params.client_package_id === pkgId)
+  check('client_package_id stored in pending (set by code, use_package not passed)', (await convOf(phone)).pending_action?.params.client_package_id === pkgId)
+  check('summary line reaches the client', /Vai usar uma sessão do seu pacote \(restam 2\)\./.test(sentTo(phone)[0]?.message ?? ''), sentTo(phone)[0]?.message)
   world.script = [() => [tu('confirm_pending')], () => [text('Pronto!')]]
   await say(phone, 'sim')
   const a = await apptsOf(cid)
@@ -681,20 +704,22 @@ sc('19 package booking consumes a session, ledger amount 0', async () => {
   check('one session consumed', Number(rem) === 2, String(rem))
   const l = await q<any>('select amount_cents from ledger_entries where appointment_id = $1 and voided_at is null', [a[0]?.id])
   check('ledger amount is 0', l.length === 1 && l[0].amount_cents === 0, JSON.stringify(l))
+  check('template carries the package line', sentTo(phone)[1]?.message.endsWith('Vai usar uma sessão do seu pacote (restam 2).') === true, sentTo(phone)[1]?.message)
   check('no price in the messages to the client', !sentTo(phone).some((s) => /R\$/.test(s.message)))
 })
 
-sc('20 empty package falls back to a paid booking plus note_for_karol', async () => {
+sc('20 package emptied between proposal and confirm: PACKAGE_EMPTY, then a paid booking plus note_for_karol', async () => {
   const phone = P(24)
   const cid = await newClient('ZZA Eva Vazia', phone)
   const pkgId = await sellPackage(cid, svcId, 1)
   world.script = [
     () => [tu('lookup_client')],
     availFor(svcId),
-    (c) => [tu('propose_booking', { client_id: cid, professional_id: maraId, service_id: svcId, action: 'placement', addon_ids: [], starts_at: firstSlot(c), use_package: true })],
-    () => [text('Vai usar uma sessão do seu pacote (restam 0). Posso confirmar?')],
+    (c) => [tu('propose_booking', { client_id: cid, option: optionOf(c) })],
+    () => [text('{resumo} Posso confirmar?')],
   ]
   await say(phone, 'quero marcar manicure')
+  check('proposal used the package', (await convOf(phone)).pending_action?.params.client_package_id === pkgId)
   // the last session is used elsewhere before the client answers
   const slotsList = spaced(await slots(milenaId, 2, 12), 1)
   await q('select rpc_book_appointment($1,$2,$3,\'placement\',\'{}\'::uuid[],$4::timestamptz,\'staff\',$5,null,$6,false)', [cid, milenaId, svcId, slotsList[0], `zza-${Math.random()}`, pkgId])
@@ -705,12 +730,12 @@ sc('20 empty package falls back to a paid booking plus note_for_karol', async ()
       check('structured PACKAGE_EMPTY error', o.ok === false && o.error === 'PACKAGE_EMPTY', JSON.stringify(o))
       return availFor(svcId)(c)
     },
-    (c) => [tu('propose_booking', { client_id: cid, professional_id: maraId, service_id: svcId, action: 'placement', addon_ids: [], starts_at: firstSlot(c) })],
+    (c) => [tu('propose_booking', { client_id: cid, option: optionOf(c), use_package: false })],
     (c) => {
       check('paid proposal shows the price', typeof c.last('propose_booking').summary.valor === 'string')
       return [tu('note_for_karol', { text: 'Pacote sem sessões: cliente foi para agendamento pago.' })]
     },
-    () => [text('Seu pacote não tem mais sessões. Esse horário fica como atendimento avulso, tudo bem?')],
+    () => [text('Seu pacote não tem mais sessões. {resumo} Tudo bem?')],
   ]
   await say(phone, 'sim')
   const c = await convOf(phone)
@@ -732,14 +757,12 @@ sc('21 a package for another service is ignored', async () => {
   world.script = [
     () => [tu('lookup_client')],
     availFor(svcId),
-    (c) => [tu('propose_booking', { client_id: cid, professional_id: maraId, service_id: svcId, action: 'placement', addon_ids: [], starts_at: firstSlot(c), use_package: true })],
+    (c) => [tu('propose_booking', { client_id: cid, option: optionOf(c) })],
     (c) => {
       const o = c.last('propose_booking')
-      check('use_package refused for the other service', o.ok === false && o.error === 'PACKAGE_INVALID', JSON.stringify(o))
-      check('nothing pending', true)
-      return [tu('propose_booking', { client_id: cid, professional_id: maraId, service_id: svcId, action: 'placement', addon_ids: [], starts_at: firstSlot(c) })]
+      check('paid proposal: price, no package, no package line', o.ok === true && typeof o.summary.valor === 'string' && o.summary.pacote === undefined && o.summary.aviso_pacote === undefined, JSON.stringify(o))
+      return [text('{resumo} Posso confirmar?')]
     },
-    () => [text('Fica R$ 80,00. Posso confirmar?')],
   ]
   await say(phone, 'quero manicure')
   world.script = [() => [tu('confirm_pending')], () => [text('Pronto!')]]
@@ -1129,6 +1152,221 @@ sc('42 a real reply registers before Z-API and attaches the provider id', async 
   const rows = await q<any>('select s.external_id, s.attached_at, m.sender, m.decision_id from agent_sends s join wa_messages m on m.external_id = s.external_id where s.conversation_id = $1', [(await convOf(phone)).id])
   check('sent, send registered and attached, message is ours', r.outcome?.status === 'sent' && rows.length >= 1 && rows.every((x) => x.attached_at && x.sender === 'agent' && x.decision_id), JSON.stringify(rows))
   check('not paused', (await convOf(phone)).mode === 'agent')
+})
+
+// ================================================================ Task 10: package at payment, agent reliability, confirmation pacing
+const lastMeta = async (phone: string) =>
+  (await q<any>("select m.meta, m.body from wa_messages m join wa_conversations c on c.id = m.conversation_id where c.phone_e164 = $1 and m.direction = 'out' order by m.created_at desc limit 1", [phone]))[0]
+const bookWithPackage = (cid: string, proId: string, startsAt: string, pkgId: string) =>
+  q<{ id: string }>("select rpc_book_appointment($1,$2,$3,'placement','{}'::uuid[],$4::timestamptz,'staff',$5,null,$6,true) as id", [cid, proId, svcId, startsAt, `zza-${Math.random()}`, pkgId]).then((r) => r[0]!.id)
+
+sc('43 literal time in the model text: regenerated, then the fallback with handoff and note', async () => {
+  const phone = P(31)
+  world.script = [() => [text('Tenho amanhã às 17:00, pode ser?')], () => [text('Que tal 17h30?')]]
+  const r = await say(phone, 'quero um horário')
+  const cv = await convOf(phone)
+  check('two model calls (original + one regeneration)', world.llmCalls === 2, String(world.llmCalls))
+  check('regeneration carried a corrective note naming the rule', JSON.stringify(world.requests[1].system).includes('CORREÇÃO OBRIGATÓRIA') && JSON.stringify(world.requests[1].system).includes('nunca escreva horários'))
+  check('fallback text sent, nothing else', sentTo(phone).length === 1 && sentTo(phone)[0]!.message === FALLBACK_TEXT, JSON.stringify(sentTo(phone)))
+  check('handoff + note for Karol with the reason', cv.mode === 'human' && cv.needs_attention === true && /time/.test(String(cv.attention_reason)), JSON.stringify([cv.mode, cv.attention_reason]))
+  check('outcome is a handoff', r.outcome?.status === 'sent' || r.outcome?.status === 'handoff', String(r.outcome?.status))
+  const m = await lastMeta(phone)
+  check('meta.guard = fallback', m?.meta?.guard === 'fallback' && Array.isArray(m.meta.tools), JSON.stringify(m?.meta))
+})
+
+sc('44 claiming a done action without a write is a violation (regenerated)', async () => {
+  const phone = P(32)
+  world.script = [() => [text('Pronto, marquei seu horário!')], () => [text('Qual serviço você quer?')]]
+  const r = await say(phone, 'quero agendar')
+  check('sent the regenerated text', r.outcome?.status === 'sent' && sentTo(phone).length === 1 && sentTo(phone)[0]!.message === 'Qual serviço você quer?', JSON.stringify(sentTo(phone)))
+  check('the corrective note names the claims rule', JSON.stringify(world.requests[1].system).includes('nunca diga que uma ação foi feita'))
+  check('meta.guard = regenerated', (await lastMeta(phone))?.meta?.guard === 'regenerated')
+  check('nothing booked', (await q('select 1 from appointments a join clients c on c.id=a.client_id where c.name like $1', ['ZZA %'])).length === 0)
+})
+
+sc('45 "vou desmarcar" without a tool call is a violation; the regeneration calls the tool', async () => {
+  const phone = P(33)
+  const cid = await newClient('ZZA Dani Desmarca', phone)
+  const s0 = (await slots(maraId))[0]!
+  const apptId = await bookStaff(cid, maraId, s0)
+  world.script = [
+    () => [tu('lookup_client')],
+    () => [text('Tudo bem, vou desmarcar seu horário.')],
+    () => [tu('propose_cancel', { appointment_id: apptId })],
+    () => [text('Posso cancelar? {resumo}')],
+  ]
+  await say(phone, 'preciso desmarcar')
+  const cv = await convOf(phone)
+  check('the promise was not sent; the proposal was', cv.pending_action?.type === 'cancel' && sentTo(phone).length === 1 && !/vou desmarcar/.test(sentTo(phone)[0]!.message), JSON.stringify(sentTo(phone)))
+  check('summary built by code reached the client', sentTo(phone)[0]!.message.includes(`Cancelar ZZA Manicure com Mara ${slotLabel(s0, Date.now())}`), sentTo(phone)[0]!.message)
+  check('appointment untouched', (await apptsOf(cid))[0].status === 'scheduled')
+})
+
+sc('46 use_package false: the booking is paid even with an eligible package', async () => {
+  const phone = P(34)
+  const cid = await newClient('ZZA Teo Recusa', phone)
+  const pkgId = await sellPackage(cid, svcId, 3)
+  world.script = [
+    () => [tu('lookup_client')],
+    availFor(svcId),
+    (c) => [tu('propose_booking', { client_id: cid, option: optionOf(c), use_package: false })],
+    (c) => {
+      const s = c.last('propose_booking').summary
+      check('paid summary, no package, no warning', typeof s.valor === 'string' && s.pacote === undefined && s.aviso_pacote === undefined, JSON.stringify(s))
+      return [text('{resumo} Posso confirmar?')]
+    },
+  ]
+  await say(phone, 'quero marcar, mas sem usar o pacote')
+  check('no package in pending', !(await convOf(phone)).pending_action?.params.client_package_id)
+  world.script = [() => [tu('confirm_pending')], () => [text('ok')]]
+  await say(phone, 'sim')
+  const a = await apptsOf(cid)
+  const l = await q<any>('select amount_cents from ledger_entries where appointment_id = $1 and voided_at is null', [a[0]?.id])
+  const rem = (await q<any>('select remaining from v_client_packages where client_package_id = $1', [pkgId]))[0]?.remaining
+  check('paid ledger amount, package untouched', a.length === 1 && a[0].client_package_id === null && l[0]?.amount_cents === 8000 && Number(rem) === 3, JSON.stringify([l, rem]))
+})
+
+sc('47 expired option: OPTION_EXPIRED, then a fresh get_availability', async () => {
+  const phone = P(35)
+  const cid = await newClient('ZZA Ivo Opcao', phone)
+  world.script = [() => [tu('lookup_client')], availFor(svcId), () => [text('Tenho {o1} ou {o2}. Qual prefere?')]]
+  await say(phone, 'quero manicure')
+  const cv = await convOf(phone)
+  const [o1, o2] = cv.last_options
+  const offered = sentTo(phone)[0]!.message
+  check('tokens expanded to labels by code', offered.includes(slotLabel(o1.starts_at, Date.now())) && offered.includes(slotLabel(o2.starts_at, Date.now())) && !offered.includes('{o'), offered)
+  await q("update wa_conversations set options_at = now() - interval '31 minutes' where phone_e164 = $1", [phone])
+  world.script = [
+    () => [tu('propose_booking', { client_id: cid, option: 'o1' })],
+    (c) => {
+      const o = c.last('propose_booking')
+      check('OPTION_EXPIRED with the next step', o.ok === false && o.code === 'OPTION_EXPIRED' && o.next === 'call get_availability again', JSON.stringify(o))
+      return availFor(svcId)(c)
+    },
+    (c) => [tu('propose_booking', { client_id: cid, option: optionOf(c) })],
+    (c) => {
+      check('fresh option accepted', c.last('propose_booking').ok === true, JSON.stringify(c.last('propose_booking')))
+      return [text('{resumo} Posso confirmar?')]
+    },
+  ]
+  await say(phone, 'pode ser o primeiro')
+  check('pending created after the refresh', (await convOf(phone)).pending_action?.type === 'book')
+  check('an unknown token is refused', await (async () => {
+    const r = await executeTool({ deps: mkDeps(), conv: (await getConversation(db, cv.id))!, settings: undefined as never, snapshotLastInboundAt: null, flags: { handoff: false, noted: false, booked: false } }, 'propose_booking', { client_id: cid, option: 'o99' })
+    return r.ok === false && r.error === 'INVALID_ARGUMENT'
+  })())
+})
+
+sc('48 cancel with a package: the session returns and the message says so', async () => {
+  const phone = P(36)
+  const cid = await newClient('ZZA Nelly Pacote', phone)
+  const pkgId = await sellPackage(cid, svcId, 3)
+  const s0 = (await slots(maraId))[0]!
+  const apptId = await bookWithPackage(cid, maraId, s0, pkgId)
+  check('session consumed before the cancel', Number((await q<any>('select remaining from v_client_packages where client_package_id = $1', [pkgId]))[0].remaining) === 2)
+  world.script = [() => [tu('lookup_client')], () => [tu('propose_cancel', { appointment_id: apptId })], () => [text('{resumo} Posso cancelar?')]]
+  await say(phone, 'preciso cancelar')
+  check('summary mentions the session coming back', /A sessão do pacote volta para você/.test(sentTo(phone)[0]?.message ?? ''), sentTo(phone)[0]?.message)
+  world.script = [() => [tu('confirm_pending')], () => [text('Cancelado!')]]
+  await say(phone, 'sim')
+  check('cancel reply is the template with the package sentence', sentTo(phone).at(-1)?.message === `Cancelei seu ZZA Manicure de ${slotLabel(s0, Date.now())}. A sessão do pacote volta para você. Se quiser remarcar é só me falar.`, sentTo(phone).at(-1)?.message)
+  check('the session returned', Number((await q<any>('select remaining from v_client_packages where client_package_id = $1', [pkgId]))[0].remaining) === 3)
+})
+
+sc('49 package that cannot be used: warning line, paid booking', async () => {
+  // (a) expires today: still active, but not on tomorrow's slots
+  const phone = P(37)
+  const cid = await newClient('ZZA Vera Vencida', phone)
+  const pkgId = await sellPackage(cid, svcId, 3)
+  await q('update client_packages set expires_at = $2::date where id = $1', [pkgId, today()])
+  world.script = [
+    () => [tu('lookup_client')], availFor(svcId),
+    (c) => [tu('propose_booking', { client_id: cid, option: optionOf(c) })],
+    (c) => {
+      const s = c.last('propose_booking').summary
+      check('expired-at-date warning, paid', s.aviso_pacote === 'Seu pacote de ZZA Manicure não pode ser usado nessa data.' && typeof s.valor === 'string' && s.pacote === undefined, JSON.stringify(s))
+      return [text('{resumo} Posso confirmar?')]
+    },
+  ]
+  await say(phone, 'quero manicure')
+  check('warning line reaches the client', sentTo(phone)[0]!.message.includes('Seu pacote de ZZA Manicure não pode ser usado nessa data.'), sentTo(phone)[0]?.message)
+  check('pending is paid', !(await convOf(phone)).pending_action?.params.client_package_id)
+  // (b) all sessions used
+  const phone2 = P(38)
+  const cid2 = await newClient('ZZA Odete Esgotada', phone2)
+  const pk2 = await sellPackage(cid2, svcId, 1)
+  await bookWithPackage(cid2, milenaId, spaced(await slots(milenaId, 2, 12), 1)[0]!, pk2)
+  world.script = [
+    () => [tu('lookup_client')], availFor(svcId),
+    (c) => [tu('propose_booking', { client_id: cid2, option: optionOf(c) })],
+    (c) => {
+      const s = c.last('propose_booking').summary
+      check('exhausted warning, paid', s.aviso_pacote === 'Seu pacote de ZZA Manicure já usou todas as sessões.' && typeof s.valor === 'string', JSON.stringify(s))
+      return [text('{resumo} Posso confirmar?')]
+    },
+  ]
+  await say(phone2, 'quero manicure')
+  check('exhausted line reaches the client', sentTo(phone2)[0]!.message.includes('Seu pacote de ZZA Manicure já usou todas as sessões.'), sentTo(phone2)[0]?.message)
+})
+
+sc('50 confirmations: 30 recipients, delays within settings, 120 s stop, resume without duplicates, ordered by start', async () => {
+  await q("insert into studio_settings (key, value) values ('confirmation_delay_min_s','4'),('confirmation_delay_max_s','8') on conflict (key) do update set value = excluded.value")
+  const fake = parseInstant(`${today()}T17:00:00`)!
+  const tomorrow = addDays(today(), 1)
+  const startOf = new Map<string, number>()
+  for (let i = 0; i < 30; i++) {
+    const phone = P(41 + i)
+    const cid = await newClient(`ZZA Conf ${String(i).padStart(2, '0')}`, phone)
+    const hour = String(6 + Math.floor((29 - i) / 2)).padStart(2, '0') // inserted in reverse order of start
+    const id = await bookStaff(cid, i % 2 ? milenaId : maraId, `${tomorrow}T${hour}:00:00-03:00`, true)
+    await q('update appointments set created_at = $2::timestamptz where id = $1', [id, new Date(fake - 5 * 3600_000).toISOString()])
+    startOf.set(phone, parseInstant(`${tomorrow}T${hour}:00:00-03:00`)!)
+  }
+  await setSettings({ confirmation_enabled: true, confirmation_hour: '16:00' })
+  let clock = fake
+  const sleeps: number[] = []
+  let seed = 7
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647)
+  const mk = () => mkDeps({ now: () => clock, sleep: async (ms) => { sleeps.push(ms); clock += ms }, random: rnd })
+  const t0 = clock
+  const r1 = await runConfirmations(mk())
+  const elapsed1 = clock - t0
+  check('run 1 stops after 120 s with recipients left', r1.sent > 0 && r1.sent < 30 && elapsed1 >= 120_000 && elapsed1 < 128_000, JSON.stringify([r1, elapsed1]))
+  check('every delay is within the settings (4 to 8 s)', sleeps.length > 0 && sleeps.every((ms) => ms >= 4000 && ms <= 8000), JSON.stringify(sleeps.slice(0, 5)))
+  clock += 5 * 60_000 // next tick
+  const r2 = await runConfirmations(mk())
+  check('run 2 resumes where run 1 stopped and finishes the list (no 40-recipient cap either)', r2.sent > 0 && r1.sent + r2.sent === 30, JSON.stringify([r1, r2]))
+  clock += 5 * 60_000
+  const r3 = await runConfirmations(mk())
+  check('every recipient got exactly one confirmation; the third tick sends nothing', r3.sent === 0 && r1.sent + r2.sent + r3.sent === 30 && world.sends.length === 30 && new Set(world.sends.map((x) => x.phone)).size === 30, JSON.stringify([r1.sent, r2.sent, r3.sent, world.sends.length]))
+  check('wa_confirmations unchanged by the resumes (30 rows)', (await q<any>("select count(*)::int as n from wa_confirmations w join appointments a on a.id = w.appointment_id join clients c on c.id = a.client_id where c.name like 'ZZA Conf %'"))[0].n === 30)
+  const starts = world.sends.map((x) => startOf.get(x.phone)!)
+  check('sent in order of the earliest appointment tomorrow', starts.every((v, i) => i === 0 || starts[i - 1]! <= v), JSON.stringify(starts.slice(0, 6)))
+  await q("delete from studio_settings where key in ('confirmation_delay_min_s','confirmation_delay_max_s')")
+  await q("insert into studio_settings (key, value) values ('confirmation_delay_min_s','2'),('confirmation_delay_max_s','6') on conflict (key) do update set value = excluded.value")
+})
+
+sc('51 cron pre-check: false when nothing is eligible, true when something is', async () => {
+  const pre = async () => (await q<any>('select _confirmations_eligible() as e'))[0].e as boolean
+  check('nothing tomorrow: false', (await pre()) === false)
+  const phone = P(80)
+  const cid = await newClient('ZZA Cron Cliente', phone)
+  const id = await bookStaff(cid, maraId, `${addDays(today(), 1)}T10:00:00-03:00`, true)
+  check('created just now (under 3 hours): false', (await pre()) === false)
+  await q("update appointments set created_at = now() - interval '4 hours' where id = $1", [id])
+  check('old enough: true', (await pre()) === true)
+  await q('insert into wa_confirmations (appointment_id, sent_at) values ($1, now())', [id])
+  check('already confirmed: false', (await pre()) === false)
+  await q('delete from wa_confirmations where appointment_id = $1', [id])
+  await q("update clients set phone_e164 = null where id = $1", [cid])
+  check('client without phone: false', (await pre()) === false)
+  await q("update clients set phone_e164 = $2 where id = $1", [cid, phone])
+  await q("update appointments set status = 'confirmed' where id = $1", [id])
+  check('not scheduled: false', (await pre()) === false)
+  await q("update appointments set status = 'scheduled' where id = $1", [id])
+  await q("update studio_settings set value = 'false'::jsonb where key = 'confirmation_enabled'")
+  await q('select _cron_send_confirmations()') // disabled: returns without calling anything
+  check('the cron wrapper is a no-op while disabled (no error)', true)
 })
 
 // ---------------------------------------------------------------- run

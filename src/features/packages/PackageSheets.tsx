@@ -1,14 +1,16 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useAuth } from '../../auth/AuthContext'
-import { Button, FieldLabel, Input, MoneyInput, Select, Sheet, Toggle, useSnackbar } from '../../components/ui'
+import { Button, EmptyState, FieldLabel, Input, MoneyInput, Pill, Select, Sheet, Skeleton, Toggle, useSnackbar } from '../../components/ui'
+import { formatDate, formatTime } from '../../lib/datetime'
 import { toTitlePt } from '../../lib/format'
 import { formatBRL } from '../../lib/money'
 import { invalidateAll, useServices } from '../../lib/queries'
-import { usePackageTemplates, type PackageTemplate } from '../../lib/clientQueries'
+import { usePackageAppointments, usePackageTemplates, type PackageTemplate } from '../../lib/clientQueries'
 import { messageOf, rpc } from '../../lib/rpc'
 import { PaymentPanel, type PayTarget } from '../finance/PaymentSheet'
 import { ClientPicker, type PickedClient } from '../clients/ClientPicker'
+import { StatusPill } from '../agenda/common'
 
 /** Vender pacote: client (search or prefilled) + active template → rpc_sell_package. */
 export function SellPackageSheet({ open, client, onClose }: { open: boolean; client?: PickedClient | null; onClose: () => void }) {
@@ -189,6 +191,58 @@ function TemplateForm({ template, onClose }: { template: PackageTemplate | null;
       <Button block loading={pending} disabled={!valid} onClick={() => void save()}>
         Salvar modelo
       </Button>
+    </div>
+  )
+}
+
+export interface PackageSummary {
+  client_package_id: string
+  template_name: string
+  sessions_total: number
+  remaining: number
+  expires_at: string
+}
+
+/** Sessões do pacote: sessions left/total, expiry and the appointments linked to it, by date. Staff-readable, no money. */
+export function PackageSessionsSheet({ pkg, onClose }: { pkg: PackageSummary | null; onClose: () => void }) {
+  return (
+    <Sheet open={!!pkg} onClose={onClose} kicker="Pacote" title="Sessões do pacote">
+      {pkg && <SessionsBody pkg={pkg} />}
+    </Sheet>
+  )
+}
+
+function SessionsBody({ pkg }: { pkg: PackageSummary }) {
+  const list = usePackageAppointments(pkg.client_package_id)
+  const rows = list.data ?? []
+  return (
+    <div className="space-y-5">
+      <div>
+        <p className="title-serif text-xl">{toTitlePt(pkg.template_name)}</p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Pill>
+            restam {pkg.remaining} de {pkg.sessions_total}
+          </Pill>
+          <Pill>vence {formatDate(pkg.expires_at)}</Pill>
+        </div>
+      </div>
+      {list.isLoading ? (
+        <Skeleton className="h-24" />
+      ) : rows.length === 0 ? (
+        <EmptyState title="Nenhuma sessão agendada" help="Os agendamentos que usarem este pacote aparecem aqui." />
+      ) : (
+        <ul className="space-y-2">
+          {rows.map((r) => (
+            <li key={r.id} className="flex items-center justify-between gap-3 rounded-[var(--radius-input)] border border-line bg-surface px-4 py-3">
+              <div className="min-w-0">
+                <p className="title-serif truncate text-lg">{`${formatDate(r.starts_at)} · ${formatTime(r.starts_at)}`}</p>
+                <p className="text-help truncate">{`${toTitlePt(r.service?.name)} · ${toTitlePt(r.professional?.name)}`}</p>
+              </div>
+              <StatusPill status={r.status} />
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

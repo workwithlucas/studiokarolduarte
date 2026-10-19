@@ -3,6 +3,7 @@
 import type { Database } from '../types/db'
 import type { AgentModeResult } from './agentQueries'
 import type { ClientAccount, FinanceEntry, FinanceSummary, PaymentResult, SettleAllocation } from './finance'
+import type { EligiblePackage, PackageUse } from './packageUse'
 import { supabase } from './supabase'
 
 export { supabase }
@@ -112,7 +113,11 @@ export const rpc = {
   myFinanceSummary: async (a: Args<'rpc_my_finance_summary'>) => (await call('rpc_my_finance_summary', a))[0] ?? { gross_cents: 0, studio_share_cents: 0 },
   // finance (owner only)
   registerPayments: async (a: Args<'rpc_register_payments'>) => (await call('rpc_register_payments', a)) as unknown as PaymentResult,
-  completeAndPay: async (a: Args<'rpc_complete_and_pay'>) => (await call('rpc_complete_and_pay', a)) as unknown as PaymentResult,
+  completeAndPay: async (a: Args<'rpc_complete_and_pay'>) => (await call('rpc_complete_and_pay', a)) as unknown as PaymentResult & Partial<PackageUse>,
+  // package at payment (owner only)
+  eligiblePackages: async (a: Args<'rpc_eligible_packages'>) => (await call('rpc_eligible_packages', a)) as EligiblePackage[],
+  applyPackageToAppointment: async (a: Args<'rpc_apply_package_to_appointment'>) => (await call('rpc_apply_package_to_appointment', a)) as unknown as PackageUse,
+  removePackageFromAppointment: (a: Args<'rpc_remove_package_from_appointment'>) => call('rpc_remove_package_from_appointment', a),
   reversePayment: (a: Args<'rpc_reverse_payment'>) => call('rpc_reverse_payment', a),
   createManualEntry: (a: Args<'rpc_create_manual_entry'>) => call('rpc_create_manual_entry', a),
   editEntry: (a: Args<'rpc_edit_entry'>) => call('rpc_edit_entry', a),

@@ -855,6 +855,83 @@ async function profFinanceFlow(maraId: string, karolId: string) {
   await login('karol@studio.test')
 }
 
+/** Task 10: package at payment. As Karol: book without a package, pay with the package (both modes), list the package sessions, remove it. As Mara: FORBIDDEN. */
+async function packageAtPaymentFlow(maraId: string) {
+  const { data: svcRows } = await supabase.from('services').select('id').eq('name', 'ZZ Pacote Pagamento')
+  const svcId = await rpc.upsertService({
+    p_id: svcRows?.[0]?.id ?? null, p_name: 'ZZ Pacote Pagamento', p_category: 'outros', p_kind: 'standard', p_duration_min: 30, p_price_cents: 6000,
+    p_maintenance_duration_min: null, p_maintenance_price_cents: null, p_cash_price_cents: null, p_active: true,
+  })
+  const { data: links } = await supabase.from('professional_services').select('service_id').eq('professional_id', maraId)
+  await rpc.setProfessionalServices({ p_professional_id: maraId, p_service_ids: [...new Set([...(links ?? []).map((l) => l.service_id), svcId])] })
+  const { data: tplRows } = await supabase.from('package_templates').select('id').eq('name', 'ZZ Modelo Pagamento')
+  const tplId = await rpc.upsertPackageTemplate({ p_id: tplRows?.[0]?.id ?? null, p_name: 'ZZ Modelo Pagamento', p_service_id: svcId, p_sessions_total: 3, p_validity_days: 90, p_price_cents: 9000, p_active: true })
+  const clientId = await rpc.upsertClient({ p_name: `ZZ Cliente Pagamento ${Date.now()}`, p_phone: null, p_external_code: null, p_birthday: null, p_notes: null })
+  const pkgId = await rpc.sellPackage({ p_client_id: clientId, p_template_id: tplId })
+  const remaining = async () => (await supabase.from('v_client_packages').select('remaining').eq('client_package_id', pkgId).maybeSingle()).data?.remaining
+
+  const today = todaySP()
+  const avail = await rpc.getAvailability({ p_professional_id: maraId, p_service_id: svcId, p_action: 'placement', p_addon_ids: [], p_from: addDaysYMD(today, 5), p_to: addDaysYMD(today, 60), p_source: 'staff' })
+  const firstOfDay = new Map<string, string>()
+  for (const a of avail) if (!firstOfDay.has(ymdOf(a.starts_at))) firstOfDay.set(ymdOf(a.starts_at), a.starts_at)
+  const days = [...firstOfDay.values()]
+  if (days.length < 4) throw new Error('not enough free days for the package-at-payment flow')
+  const book = (startsAt: string) =>
+    rpc.bookAppointment({ p_client_id: clientId, p_professional_id: maraId, p_service_id: svcId, p_action: 'placement', p_addon_ids: [], p_starts_at: startsAt, p_source: 'staff', p_idempotency_key: crypto.randomUUID(), p_notes: null, p_client_package_id: null, p_force: false })
+  const priceOf = async (id: string) => (await supabase.from('appointments').select('price_cents').eq('id', id).maybeSingle()).data?.price_cents
+  const amountOf = async (id: string) => (await supabase.from('ledger_entries').select('amount_cents').eq('appointment_id', id).is('voided_at', null).maybeSingle()).data?.amount_cents
+
+  // ---- book without a package: full price, the package is only a candidate
+  const a1 = await book(days[0]!)
+  const a2 = await book(days[1]!)
+  const a3 = await book(days[2]!)
+  check('pkg-at-payment: booked without a package at full price', (await priceOf(a1)) === 6000 && (await amountOf(a1)) === 6000)
+  const eligible = await rpc.eligiblePackages({ p_appointment_id: a1 })
+  check('pkg-at-payment: rpc_eligible_packages lists the package', eligible.length === 1 && eligible[0]!.client_package_id === pkgId && eligible[0]!.remaining === 3)
+  const listed = await rpc.financeList({ p_mode: 'receivable', p_from: today, p_to: addDaysYMD(today, 90), p_status: null, p_professional_id: null, p_client_id: clientId, p_query: null, p_include_reversed: false, p_limit: 50, p_offset: 0 })
+  const row = listed.find((r) => r.appointment_id === a1)
+  check('pkg-at-payment: A RECEBER row carries the package fields', row?.pkg_client_package_id === pkgId && row?.pkg_remaining === 3, JSON.stringify([row?.pkg_client_package_id, row?.pkg_remaining]))
+
+  // ---- Payment with the package: pay mode (apply) on one, complete mode (complete and use, one transaction) on another
+  const used = await rpc.applyPackageToAppointment({ p_appointment_id: a1, p_client_package_id: pkgId })
+  check('pkg-at-payment: apply returns session 1/3', used.session_number === 1 && used.sessions_total === 3 && used.remaining === 2, JSON.stringify(used))
+  check('pkg-at-payment: price and ledger amount are 0, one session consumed', (await priceOf(a1)) === 0 && (await amountOf(a1)) === 0 && (await remaining()) === 2)
+  const done = await rpc.completeAndPay({ p_appointment_id: a2, p_actual_end: null, p_discount_cents: null, p_payments: [], p_request_id: crypto.randomUUID(), p_client_package_id: pkgId })
+  check('pkg-at-payment: complete_and_pay with the package returns session 2/3', done.session_number === 2 && done.remaining === 1, JSON.stringify(done))
+  check('pkg-at-payment: a2 completed and free', (await statusOf(a2)) === 'completed' && (await priceOf(a2)) === 0 && (await amountOf(a2)) === 0)
+  await expectCode('pkg-at-payment: package + payments -> BAD_AMOUNT', 'BAD_AMOUNT', () =>
+    rpc.completeAndPay({ p_appointment_id: a3, p_actual_end: null, p_discount_cents: null, p_payments: [{ amount_cents: 100, method: 'pix' }], p_request_id: crypto.randomUUID(), p_client_package_id: pkgId }),
+  )
+  check('pkg-at-payment: a3 untouched after the failure', (await statusOf(a3)) === 'scheduled' && (await priceOf(a3)) === 6000)
+
+  // ---- Pacotes › Sessões do pacote (staff-readable)
+  const sessionRows = async () =>
+    (await supabase.from('appointments').select('id,starts_at,status,service:services(name),professional:professionals(name)').eq('client_package_id', pkgId).order('starts_at')).data ?? []
+  const rows = await sessionRows()
+  check('pkg-at-payment: sessions list has both appointments by date', rows.length === 2 && rows[0]!.id === a1 && rows[1]!.id === a2 && rows[0]!.status === 'scheduled' && rows[1]!.status === 'completed', JSON.stringify(rows.map((r) => [r.id, r.status])))
+
+  // ---- remove the package from the scheduled one: price comes back, the session returns
+  await rpc.removePackageFromAppointment({ p_appointment_id: a1 })
+  check('pkg-at-payment: remove restores price, amount and the session', (await priceOf(a1)) === 6000 && (await amountOf(a1)) === 6000 && (await remaining()) === 2)
+  check('pkg-at-payment: sessions list now has one appointment', (await sessionRows()).length === 1)
+  await rpc.removePackageFromAppointment({ p_appointment_id: a1 }) // already unlinked: OK
+  check('pkg-at-payment: remove twice is a no-op', (await remaining()) === 2)
+
+  // ---- Mara (professional): FORBIDDEN on every new RPC, but the sessions list is readable
+  await login('mara@studio.test')
+  await expectCode('mara: rpc_eligible_packages -> FORBIDDEN', 'FORBIDDEN', () => rpc.eligiblePackages({ p_appointment_id: a1 }))
+  await expectCode('mara: rpc_apply_package_to_appointment -> FORBIDDEN', 'FORBIDDEN', () => rpc.applyPackageToAppointment({ p_appointment_id: a1, p_client_package_id: pkgId }))
+  await expectCode('mara: rpc_remove_package_from_appointment -> FORBIDDEN', 'FORBIDDEN', () => rpc.removePackageFromAppointment({ p_appointment_id: a2 }))
+  await expectCode('mara: rpc_complete_and_pay with a package -> FORBIDDEN', 'FORBIDDEN', () =>
+    rpc.completeAndPay({ p_appointment_id: a3, p_actual_end: null, p_discount_cents: null, p_payments: [], p_request_id: crypto.randomUUID(), p_client_package_id: pkgId }),
+  )
+  check('mara: can read the sessions of the package (no money)', (await sessionRows()).length === 1)
+
+  // ---- cleanup
+  await login('karol@studio.test')
+  for (const id of [a1, a3]) await rpc.cancelAppointment({ p_appointment_id: id, p_reason: 'Outro' })
+}
+
 async function main() {
   await login('karol@studio.test')
 
@@ -1007,6 +1084,8 @@ async function main() {
   await editFlow(mara.id, karol.id)
   await login('karol@studio.test')
   await profFinanceFlow(mara.id, karol.id)
+  await login('karol@studio.test')
+  await packageAtPaymentFlow(mara.id)
 
   // ---- cleanup + invariants
   await login('karol@studio.test')

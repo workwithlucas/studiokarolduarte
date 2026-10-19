@@ -248,9 +248,9 @@ describe('confirmation selection', () => {
     expect(confirmationText(b[0]!)).toContain('Posso confirmar?')
   })
   it('test mode: whitelisted phones only', () => expect(sel([mk('a')], new Set(), { ...settings, agent_mode: 'test', agent_test_numbers: [] })).toEqual([]))
-  it('caps at 40 recipients per run', () => {
+  it('has no per-run recipient cap (the 120 s budget paces the run)', () => {
     const many = Array.from({ length: 50 }, (_, i) => mk(`m${i}`, { client_phone: `11 9${String(1000_0000 + i)}` }))
-    expect(sel(many)).toHaveLength(40)
+    expect(sel(many)).toHaveLength(50)
   })
   it('opens between confirmation_hour and 20:00 only, and never when off', () => {
     expect(confirmationsOpen(settings, sp('2026-10-05T15:59:00'))).toBe(false)

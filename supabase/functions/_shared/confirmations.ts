@@ -5,9 +5,10 @@ import { firstName, normalizePhone } from './phone.ts'
 import { addDays, hhmm, hhmmToMinutes, isoOf, parseInstant, spParts } from './time.ts'
 import type { Deps, Settings } from './types.ts'
 
-export const MAX_RECIPIENTS = 40
 export const MIN_AGE_MS = 3 * 3_600_000
 export const CUTOFF_MINUTES = 20 * 60
+/** One invocation stops sending after this long; the next 5-minute tick resumes without duplicates. */
+export const RUN_BUDGET_MS = 120_000
 
 export interface CandidateAppt {
   id: string
@@ -56,7 +57,7 @@ export function selectConfirmations(input: { appointments: CandidateAppt[]; alre
     b.items.push(a)
     byPhone.set(phone, b)
   }
-  return [...byPhone.values()].slice(0, MAX_RECIPIENTS)
+  return [...byPhone.values()] // earliest appointment tomorrow first (the input is sorted by start)
 }
 
 export function confirmationText(batch: Batch): string {
@@ -76,7 +77,7 @@ export interface ConfirmationsResult {
   reason?: string
 }
 
-export async function runConfirmations(deps: Deps, budgetMs = 110_000): Promise<ConfirmationsResult> {
+export async function runConfirmations(deps: Deps, budgetMs = RUN_BUDGET_MS): Promise<ConfirmationsResult> {
   const { db } = deps
   const started = deps.now()
   const settings = await loadSettings(db)
@@ -104,10 +105,12 @@ export async function runConfirmations(deps: Deps, budgetMs = 110_000): Promise<
   let skipped = 0
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i]!
+    if (deps.now() - started >= budgetMs) break // the next tick continues where this one stopped
     if (i > 0) {
-      const delay = 20_000 + Math.floor(deps.random() * 40_000)
-      if (deps.now() + delay - started > budgetMs) break // the next 15-minute run continues where this one stopped
-      await deps.sleep(delay)
+      const lo = settings.confirmation_delay_min_s
+      const hi = Math.max(lo, settings.confirmation_delay_max_s)
+      await deps.sleep(Math.round((lo + deps.random() * (hi - lo)) * 1000))
+      if (deps.now() - started >= budgetMs) break
     }
     const convId = await callRpc<string>(db, 'agent_touch_conversation', { p_phone: batch.phone, p_client_ids: batch.clientIds })
     const claimed = await callRpc<boolean>(db, 'agent_claim', { p_conversation_id: convId, p_lease_seconds: 120 })

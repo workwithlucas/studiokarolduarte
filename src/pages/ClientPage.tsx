@@ -11,7 +11,7 @@ import { Avatar, dayMonth, SegmentPill, WhatsAppButton } from '../features/clien
 import { ClientAccountSection } from '../features/finance/ClientAccount'
 import { ClientFinance } from '../features/finance/ClientFinance'
 import { EditClientSheet } from '../features/clients/ClientSheets'
-import { SellPackageSheet } from '../features/packages/PackageSheets'
+import { PackageSessionsSheet, SellPackageSheet, type PackageSummary } from '../features/packages/PackageSheets'
 import { useClientContext, useClientHistory, useClientPackages, useClientRow, useClientUpcoming } from '../lib/clientQueries'
 import { formatDate, formatDayShort, formatTime, todaySP, ymdOf } from '../lib/datetime'
 import { formatPhoneBR, toTitlePt } from '../lib/format'
@@ -36,6 +36,7 @@ export function ClientPage() {
   const [bookOpen, setBookOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [sellOpen, setSellOpen] = useState(false)
+  const [sessions, setSessions] = useState<PackageSummary | null>(null)
   const [archiving, setArchiving] = useState(false)
 
   if (row.isLoading) return <Skeleton className="h-48" />
@@ -207,14 +208,21 @@ export function ClientPage() {
         ) : (
           <ul className="space-y-2">
             {activePackages.map((p) => (
-              <li key={p.client_package_id} className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-input)] border border-line bg-surface px-4 py-3">
-                <p className="title-serif text-lg">{toTitlePt(p.template_name)}</p>
-                <div className="flex gap-2">
-                  <Pill>
-                    restantes {p.remaining}/{p.sessions_total}
-                  </Pill>
-                  <Pill>vence {formatDate(p.expires_at)}</Pill>
-                </div>
+              <li key={p.client_package_id}>
+                <button
+                  type="button"
+                  aria-label={`Sessões do pacote ${toTitlePt(p.template_name)}`}
+                  onClick={() => setSessions(p)}
+                  className="flex w-full flex-wrap items-center justify-between gap-2 rounded-[var(--radius-input)] border border-line bg-surface px-4 py-3 text-left"
+                >
+                  <p className="title-serif text-lg">{toTitlePt(p.template_name)}</p>
+                  <div className="flex gap-2">
+                    <Pill>
+                      restantes {p.remaining}/{p.sessions_total}
+                    </Pill>
+                    <Pill>vence {formatDate(p.expires_at)}</Pill>
+                  </div>
+                </button>
               </li>
             ))}
           </ul>
@@ -230,6 +238,7 @@ export function ClientPage() {
       <AppointmentSheet appointment={selected} onClose={() => setSelected(null)} />
       <EditClientSheet clientId={c.id} open={editOpen} onClose={() => setEditOpen(false)} />
       <SellPackageSheet open={sellOpen} client={picked} onClose={() => setSellOpen(false)} />
+      <PackageSessionsSheet pkg={sessions} onClose={() => setSessions(null)} />
     </div>
   )
 }

@@ -13,7 +13,7 @@ import { AdjustTimePanel, AnteciparPanel } from './AdjustTime'
 import { EditAppointmentPanel } from './EditAppointment'
 import { PackagePill, serviceLine, StatusPill } from './common'
 
-export type SheetMode = 'view' | 'reschedule' | 'adjust' | 'edit' | 'antecipar' | 'cancel' | 'complete' | 'pay'
+export type SheetMode = 'view' | 'reschedule' | 'adjust' | 'edit' | 'antecipar' | 'cancel' | 'complete' | 'pay' | 'unpackage'
 
 const CANCEL_REASONS = ['Cliente cancelou', 'Reagendou', 'Outro']
 
@@ -104,6 +104,8 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
 
   if (mode === 'cancel') return <Cancel a={a} onBack={() => setMode('view')} run={run} pending={pending} />
 
+  if (mode === 'unpackage') return <RemovePackage a={a} onBack={() => setMode('view')} run={run} pending={pending} />
+
   if (mode === 'complete') {
     if (!isOwner) return <Complete a={a} day={day} onBack={() => setMode('view')} run={run} afterClose={afterClose} pending={pending} />
     if (!entry.data) return <Skeleton className="h-40" />
@@ -112,6 +114,7 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
         target={{
           mode: 'complete',
           appointmentId: a.id,
+          startsAt: a.starts_at,
           day,
           clientId: a.client_id,
           title: toTitlePt(a.client?.name),
@@ -132,6 +135,8 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
         target={{
           mode: 'pay',
           entryId: entry.data.entry_id,
+          appointmentId: a.id,
+          startsAt: a.starts_at,
           clientId: a.client_id,
           title: toTitlePt(a.client?.name),
           detail: serviceLine(a, true),
@@ -146,6 +151,7 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
   }
 
   const money = isOwner && a.status === 'completed' && entry.data && entry.data.final_cents > 0 ? entry.data : null
+  const canRemovePackage = isOwner && !!a.client_package_id && (active || a.status === 'completed')
 
   return (
     <div className="space-y-5">
@@ -203,6 +209,11 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
           >
             Faltou
           </Button>
+          {canRemovePackage && (
+            <Button variant="secondary" onClick={() => setMode('unpackage')}>
+              Remover pacote
+            </Button>
+          )}
           <Button variant="danger" onClick={() => setMode('cancel')}>
             Cancelar
           </Button>
@@ -213,6 +224,11 @@ function Body({ a, initialMode, onClose }: { a: AppointmentRow; initialMode: She
           {a.status === 'completed' && (
             <Button variant="secondary" onClick={() => setMode('edit')}>
               Alterar serviço
+            </Button>
+          )}
+          {canRemovePackage && (
+            <Button variant="secondary" onClick={() => setMode('unpackage')}>
+              Remover pacote
             </Button>
           )}
         </div>
@@ -351,6 +367,32 @@ function Cancel({
           Cancelar agendamento
         </Button>
         <Button variant="ghost" onClick={onBack}>
+          Voltar
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function RemovePackage({
+  a,
+  onBack,
+  run,
+  pending,
+}: {
+  a: AppointmentRow
+  onBack: () => void
+  run: (fn: () => Promise<unknown>, ok: string) => Promise<void>
+  pending: boolean
+}) {
+  return (
+    <div role="alertdialog" aria-label="Remover pacote" className="space-y-5">
+      <p className="text-base">Remover o pacote deste atendimento? A sessão volta para o pacote e o atendimento passa a ser cobrado pelo valor do serviço.</p>
+      <div className="flex gap-2">
+        <Button variant="danger" loading={pending} onClick={() => void run(() => rpc.removePackageFromAppointment({ p_appointment_id: a.id }), 'Pacote removido do atendimento')}>
+          Remover pacote
+        </Button>
+        <Button variant="ghost" disabled={pending} onClick={onBack}>
           Voltar
         </Button>
       </div>

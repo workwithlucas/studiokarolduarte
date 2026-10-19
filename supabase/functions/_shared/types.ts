@@ -1,3 +1,5 @@
+import type { OptionRef } from './reply.ts'
+
 // Shared contracts. Everything with side effects (db, fetch, clock, sleep, randomness) is injected.
 
 export interface DbError {
@@ -49,6 +51,9 @@ export interface Settings {
   history_messages: number
   retention_days: number
   debounce_seconds: number
+  /** Pause between confirmation recipients: random between min and max seconds. */
+  confirmation_delay_min_s: number
+  confirmation_delay_max_s: number
 }
 
 export interface PendingAction {
@@ -78,6 +83,9 @@ export interface Conversation {
   attention_reason: string | null
   failed_runs: number
   audio_failures: number
+  /** Options of the last get_availability (professional, service, action, start, label) and when they were stored. */
+  last_options: OptionRef[] | null
+  options_at: string | null
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -92,4 +100,6 @@ export const DEFAULT_SETTINGS: Settings = {
   history_messages: 12,
   retention_days: 14,
   debounce_seconds: 8,
+  confirmation_delay_min_s: 2,
+  confirmation_delay_max_s: 6,
 }

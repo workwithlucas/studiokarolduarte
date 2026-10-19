@@ -25,6 +25,7 @@ Regras deste roteiro:
 12. Financeiro da profissional, Tarefa 11: backup, depois `supabase db push` (passo 19e)
 13. Endurecimento do agente, Tarefa 12 (incidente de 05/10): backup, `supabase db push`, deploy de todas as funções do agente (passo 19f). **O agente fica *Desligada* até as conferências do 19f passarem.**
 13b. Alterar serviço e duração, busca na agenda, Tarefa 13: backup, depois `supabase db push` (passo 19g)
+13c. Pacote no pagamento, confiabilidade da Thaís e ritmo das confirmações (Tarefa 10 desta rodada): backup, `supabase db push`, deploy de todas as funções do agente (passo 19h)
 14. Agente em modo *Sombra*, depois *Teste* (passo 20)
 15. Agente em modo *No ar* (passo 21)
 
@@ -427,6 +428,68 @@ supabase db push
 3. **Publique o app** (passos 14 e 15).
 4. **Conferir.** Em *Agenda*, a barra de busca no topo acha cliente por nome (sem acento, maiúscula ou minúscula, parte do nome) ou por telefone; toque no resultado leva ao dia e abre o agendamento. Em um agendamento, *Alterar serviço* troca serviço, ação e adicionais e o campo *Duração* aceita qualquer minuto de 5 a 600, mostrando "Termina às HH:MM". Se o lançamento já tem pagamento, só a duração muda ("Estorne o pagamento antes de alterar o serviço"). Depois de rodar `select * from check_invariants();`, não deve voltar nenhuma linha. Se voltar `I23`, o valor de um lançamento em aberto difere do preço do agendamento sem que a dona tenha editado o valor à mão (lançamentos com valor editado em *Financeiro* são ignorados por essa verificação). Aplique também a migration `20261011120000` (Tarefa 13B), que traz essa regra.
 
+**19h. Pacote no pagamento, confiabilidade da Thaís e ritmo das confirmações (Tarefa 10 desta rodada).** Faça nesta ordem, com o Supabase de produção já vinculado (passo 6) e, de preferência, **a Thaís em *Desligada*** até a conferência 6. Traz uma migration nova (`20261012120000_package_at_payment.sql`), aditiva: `wa_conversations.last_options` e `options_at`, `wa_messages.meta`, os ajustes `confirmation_delay_min_s` (2) e `confirmation_delay_max_s` (6) (só criados se ainda não existirem, nunca sobrescritos), as funções `rpc_eligible_packages`, `rpc_apply_package_to_appointment` e `rpc_remove_package_from_appointment` (só a dona), o parâmetro novo `p_client_package_id` em `rpc_complete_and_pay`, os campos `pkg_client_package_id` e `pkg_remaining` em `rpc_finance_list`, a nova checagem prévia do cron de confirmações e as verificações **I24** e **I25** em `check_invariants()`. Nenhum código de erro novo e nada é renomeado. Atenção: `rpc_complete_and_pay` e `rpc_finance_list` são recriadas (a primeira ganha um parâmetro com padrão; a segunda ganha duas colunas no fim); os nomes continuam os mesmos. As verificações de pacote são **I24** (agendamento com pacote cujo lançamento vigente não está em R$ 0,00) e **I25** (pacote de outra cliente ou de outro serviço); I20 a I23 já existiam e não mudam.
+
+1. **Backup antes de mexer no banco:**
+
+```powershell
+$env:DATABASE_URL = Read-Host "DATABASE_URL de produção"
+```
+
+```powershell
+npm run backup
+```
+
+2. **Aplique a migration:**
+
+```powershell
+supabase db push
+```
+
+   Se o `pg_cron` estiver ativo, a mesma migration reagenda o job `send-confirmations` para rodar a cada 5 minutos (antes: 15). O job agora só chama a função quando as confirmações estão ligadas, está entre o horário configurado e 20:00 (São Paulo) **e** existe algum agendamento de amanhã a confirmar (status *agendado*, cliente com telefone, sem confirmação enviada, criado há 3 horas ou mais). Sem os segredos do Vault (`functions_base_url`, `cron_secret`) o job continua sem fazer nada.
+
+3. **Publique todas as funções do agente** (elas compartilham o mesmo código, então todas precisam ser publicadas de novo). Um comando por linha:
+
+```powershell
+supabase functions deploy wa-webhook --no-verify-jwt
+```
+
+```powershell
+supabase functions deploy agent-run --no-verify-jwt
+```
+
+```powershell
+supabase functions deploy wa-sweep --no-verify-jwt
+```
+
+```powershell
+supabase functions deploy send-confirmations --no-verify-jwt
+```
+
+```powershell
+supabase functions deploy notify-reschedule --no-verify-jwt
+```
+
+4. **Publique o app** (passos 14 e 15).
+5. **Ritmo das confirmações (opcional).** O intervalo entre uma cliente e outra é sorteado entre `confirmation_delay_min_s` e `confirmation_delay_max_s` segundos (padrão 2 e 6). Cada execução envia por até 120 segundos e para; a próxima (5 minutos depois) continua de onde parou, sem repetir ninguém, começando pelo agendamento de amanhã mais cedo. Não há mais limite de destinatárias por execução. Para mudar, no SQL Editor do Supabase:
+
+```sql
+update studio_settings set value = '3' where key = 'confirmation_delay_min_s';
+```
+
+```sql
+update studio_settings set value = '8' where key = 'confirmation_delay_max_s';
+```
+
+6. **Conferir.**
+   - `select * from check_invariants();` não devolve linhas. Se voltar `I24`, um agendamento com pacote tem lançamento diferente de R$ 0,00; se voltar `I25`, o pacote do agendamento é de outra cliente ou de outro serviço.
+   - *Agenda*, agendamento sem pacote de cliente que tem pacote do mesmo serviço: *Concluir* mostra o primeiro chip **PACOTE · X restantes**. Ao escolhê-lo somem o desconto e as formas de pagamento, aparece "Usa 1 sessão do pacote · R$ 0,00 · sessão X/N" e o botão vira **Concluir e usar pacote** (em *Receber* vira **Usar pacote**). O aviso final é "Sessão X/N do pacote usada". Se já houver pagamento, aparece a mensagem de pagamentos registrados e "Estorne o pagamento no Extrato antes de usar o pacote".
+   - *Financeiro* › *A receber*: a linha ganha a etiqueta dourada **PACOTE · X** quando a cliente tem pacote que cobre o serviço; *Dar baixa* continua abrindo a mesma folha de pagamento.
+   - No agendamento com pacote (só a dona): **Remover pacote** (pede confirmação). O preço do serviço volta, o lançamento volta ao valor e a sessão volta para o pacote.
+   - *Pacotes* › *Ativos* e a página da cliente: tocar no pacote abre **Sessões do pacote** (restam X de N, validade e os agendamentos ligados, por data, com a etiqueta de situação). Profissionais também veem essa lista; nenhuma delas vê valores.
+   - Agente (use *Teste* com o seu número): ao oferecer horários a Thaís escreve só as opções (o sistema troca pelo dia e a hora, por exemplo "amanhã (quarta, 21/10) às 17:00"); depois que a cliente aceita, a mensagem final é montada pelo sistema ("Pronto, Ana! Agendei ... com ... amanhã (quarta, 21/10) às 17:00."), seguida do endereço. As opções valem 30 minutos; depois disso ela busca os horários de novo. Cliente com pacote do serviço usa a sessão do pacote sem a Thaís dizer preço; se o pacote venceu para aquela data ou acabou, o resumo avisa e o agendamento é pago.
+   - Se a Thaís escrever um horário, uma data, um dia da semana (depois de consultar a agenda), afirmar que marcou/cancelou sem ter feito, ou prometer uma ação, a resposta é regenerada uma vez; se continuar errada, sai "Só um instante, vou confirmar isso com a Karol e já te retorno.", a conversa passa para a equipe e o motivo aparece em *Precisa de você*. A coluna `meta` da mensagem em `wa_messages` guarda as ferramentas usadas e `guard` (`none`, `regenerated` ou `fallback`).
+
 **20. Modo Teste com o seu telefone.** No app, *Agente*: em *Teste* adicione o seu número (com DDD) e escolha *Teste*. Mande mensagens do seu celular e confira:
 
 - comece por *Sombra* por algumas horas (só rascunhos, nenhuma mensagem sai) e leia *Rascunhos da Thaís*;
@@ -443,7 +506,7 @@ Teste também um áudio, uma foto e uma figurinha. Se algo estiver estranho, toq
 
 **21. Modo No ar.** Quando estiver satisfeita, escolha *No ar* (o app pede confirmação). Acompanhe a página *Agente* nos primeiros dias.
 
-**22. Confirmações de amanhã (opcional, depois de alguns dias no ar).** Em *Agente* > *Confirmações*, ligue a chave e ajuste o horário (a partir de 16:00, até 20:00). Elas só saem para agendamentos de amanhã, com status *agendado*, criados há pelo menos 3 horas.
+**22. Confirmações de amanhã (opcional, depois de alguns dias no ar).** Em *Agente* > *Confirmações*, ligue a chave e ajuste o horário (a partir de 16:00, até 20:00). Elas só saem para agendamentos de amanhã, com status *agendado*, criados há pelo menos 3 horas. O envio é conferido a cada 5 minutos e vai pausando alguns segundos entre uma cliente e outra (passo 19h, item 5).
 
 ## Parte G: rotina
 

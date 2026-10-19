@@ -2,7 +2,7 @@
 import type { ChatMessage } from './anthropic.ts'
 import { unwrap, type StoredMessage } from './db.ts'
 import { safeClientContext, type ToolCtx } from './tools.ts'
-import { addDays, ddmm, humanSlot, parseInstant, spParts, weekdayName, weekdayOfYmd } from './time.ts'
+import { addDays, ddmm, slotLabel, spParts, weekdayName, weekdayOfYmd } from './time.ts'
 
 /** Label for what staff typed on the phone: the model must never repeat or contradict it. */
 export const STAFF_LABEL = '[Equipe]'
@@ -67,7 +67,7 @@ export async function buildDynamicBlock(ctx: ToolCtx): Promise<string> {
   lines.push(
     'PROPOSTA PENDENTE: ' +
       (pa
-        ? `${pa.type} — ${JSON.stringify(pa.summary)} — ${pa.presented_baseline ? 'resumo já apresentado à cliente; aguardando a resposta dela' : 'ainda NÃO apresentada à cliente'}; expira em ${pa.expires_at}.`
+        ? `${pa.type} — ${JSON.stringify(pa.summary)} — ${pa.presented_baseline ? 'resumo já apresentado à cliente; aguardando a resposta dela' : 'ainda NÃO apresentada à cliente'}; vale por 30 minutos.`
         : 'nenhuma.'),
   )
 
@@ -80,7 +80,7 @@ export async function buildDynamicBlock(ctx: ToolCtx): Promise<string> {
     lines.push(
       'AGUARDANDO CONFIRMAÇÃO: ' +
         ((rows ?? []).length
-          ? rows.map((r) => `${r.client?.name ?? ''} — ${r.service?.name ?? ''} com ${r.professional?.name ?? ''}, ${humanSlot(parseInstant(r.starts_at) ?? 0)} (id ${r.id})`).join('; ')
+          ? rows.map((r) => `${r.client?.name ?? ''} — ${r.service?.name ?? ''} com ${r.professional?.name ?? ''}, ${slotLabel(r.starts_at, now)} (id ${r.id})`).join('; ')
           : 'nada.'),
     )
   }
