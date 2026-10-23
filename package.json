@@ -14,6 +14,8 @@
     "test:flow": "tsx scripts/test-flow.ts",
     "dev:users": "tsx scripts/dev-users.ts",
     "test:agent": "tsx scripts/test-agent.ts",
+    "test:assistant": "tsx scripts/test-assistant.ts",
+    "sim:assistant": "tsx scripts/sim-assistant.ts",
     "test:deno": "tsx scripts/test-deno.ts",
     "smoke:prod": "tsx scripts/smoke-prod.ts",
     "sim:agent": "tsx scripts/sim-agent.ts",

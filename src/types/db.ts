@@ -431,6 +431,72 @@ export type Database = {
           },
         ]
       }
+      assistant_messages: {
+        Row: {
+          body: string | null
+          card: Json | null
+          created_at: string
+          id: string
+          meta: Json | null
+          owner_user_id: string
+          role: string
+        }
+        Insert: {
+          body?: string | null
+          card?: Json | null
+          created_at?: string
+          id?: string
+          meta?: Json | null
+          owner_user_id: string
+          role: string
+        }
+        Update: {
+          body?: string | null
+          card?: Json | null
+          created_at?: string
+          id?: string
+          meta?: Json | null
+          owner_user_id?: string
+          role?: string
+        }
+        Relationships: []
+      }
+      assistant_pending: {
+        Row: {
+          actions: Json
+          created_at: string
+          executed_at: string | null
+          expires_at: string
+          id: string
+          owner_user_id: string
+          result: Json | null
+          status: string
+          undo: Json | null
+        }
+        Insert: {
+          actions: Json
+          created_at?: string
+          executed_at?: string | null
+          expires_at?: string
+          id?: string
+          owner_user_id: string
+          result?: Json | null
+          status?: string
+          undo?: Json | null
+        }
+        Update: {
+          actions?: Json
+          created_at?: string
+          executed_at?: string | null
+          expires_at?: string
+          id?: string
+          owner_user_id?: string
+          result?: Json | null
+          status?: string
+          undo?: Json | null
+        }
+        Relationships: []
+      }
       audit_log: {
         Row: {
           action: string
@@ -1757,6 +1823,7 @@ export type Database = {
         Args: { p_client_ids: string[]; p_phone: string }
         Returns: string
       }
+      assistant_purge_old: { Args: never; Returns: Json }
       check_invariants: {
         Args: never
         Returns: {
@@ -1953,6 +2020,19 @@ export type Database = {
       rpc_finance_entry: {
         Args: { p_appointment_id?: string; p_client_package_id?: string }
         Returns: Json
+      }
+      rpc_finance_entry_by_id: {
+        Args: { p_entry_id?: string; p_payment_id?: string }
+        Returns: Json
+      }
+      rpc_finance_find_duplicate: {
+        Args: {
+          p_amount_cents: number
+          p_description: string
+          p_due_date: string
+          p_kind: Database["public"]["Enums"]["entry_kind"]
+        }
+        Returns: boolean
       }
       rpc_finance_import_keys: { Args: { p_keys: string[] }; Returns: string[] }
       rpc_finance_list: {

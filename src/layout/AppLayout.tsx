@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { Sheet } from '../components/ui'
+import { AssistantLauncher } from '../features/assistant/AssistantLauncher'
 
 export function AppLayout() {
   const { isOwner, signOut, professional } = useAuth()
@@ -87,6 +88,8 @@ export function AppLayout() {
           Mais
         </button>
       </nav>
+
+      {isOwner && <AssistantLauncher />}
 
       <Sheet open={moreOpen} onClose={() => setMoreOpen(false)} title="Mais">
         <ul className="space-y-2">

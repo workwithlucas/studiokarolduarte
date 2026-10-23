@@ -22,7 +22,7 @@ const check = (name: string, ok: boolean, extra = '') => {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-function localStatus(): { API_URL: string; DB_URL: string } {
+function localStatus(): { API_URL: string; DB_URL: string; ANON_KEY: string } {
   const r = spawnSync('supabase', ['status', '-o', 'json'], { encoding: 'utf8', shell: true })
   const out = r.stdout ?? ''
   try {
@@ -116,6 +116,32 @@ async function main() {
       check(`${fn} boots and answers`, r.status === 401 || r.status === 200, `HTTP ${r.status}`)
     }
 
+    // ---- assistant-chat (owner chat): JWT checked inside, CORS, owner-only, graceful when the model is unreachable
+    {
+      const pre = await fetch(`${BASE}/assistant-chat`, { method: 'OPTIONS', headers: { origin: 'http://localhost:5173', 'access-control-request-method': 'POST' } })
+      check('assistant-chat OPTIONS: 200 with CORS', pre.status === 200 && pre.headers.get('access-control-allow-origin') === '*', `HTTP ${pre.status}`)
+      const get = await fetch(`${BASE}/assistant-chat`)
+      check('assistant-chat GET -> 405', get.status === 405, `HTTP ${get.status}`)
+      const anon = await post('assistant-chat', JSON.stringify({ action: 'message', text: 'oi' }))
+      check('assistant-chat without token -> 401', anon.status === 401, `HTTP ${anon.status}`)
+      spawnSync('npx', ['tsx', 'scripts/dev-users.ts'], { shell: true, stdio: 'ignore' })
+      const login = async (email: string) => {
+        const r = await fetch(`${status.API_URL}/auth/v1/token?grant_type=password`, {
+          method: 'POST', headers: { 'content-type': 'application/json', apikey: status.ANON_KEY }, body: JSON.stringify({ email, password: 'studio-dev-123' }),
+        })
+        return ((await r.json()) as { access_token?: string }).access_token ?? ''
+      }
+      const [ownerJwt, proJwt] = [await login('karol@studio.test'), await login('mara@studio.test')]
+      const asPro = await post('assistant-chat', JSON.stringify({ action: 'message', text: 'oi' }), { authorization: `Bearer ${proJwt}` })
+      check('assistant-chat professional -> 403', asPro.status === 403, `HTTP ${asPro.status}`)
+      await q('delete from assistant_messages')
+      const asOwner = await post('assistant-chat', JSON.stringify({ action: 'message', text: 'Resumo de hoje' }), { authorization: `Bearer ${ownerJwt}` })
+      const body = (await asOwner.json()) as { messages?: Array<{ role: string }> }
+      check('assistant-chat owner: 200, an unreachable model is answered, not thrown', asOwner.status === 200 && !!body.messages?.some((m) => m.role === 'assistant'), `HTTP ${asOwner.status}`)
+      check('assistant-chat owner: rows written by the service client', (await q("select 1 from assistant_messages where role = 'user'")).length === 1)
+      await q('delete from assistant_messages')
+    }
+
     // ---- wa-webhook auth
     const bad = await post('wa-webhook?s=wrong', fixture('text', `T-${run}-bad`))
     check('wa-webhook wrong s -> 401', bad.status === 401, `HTTP ${bad.status}`)
@@ -180,7 +206,7 @@ async function main() {
     check('send-confirmations disabled: zero sends', confAfter === confBefore && outAfter === outBefore && !/"sent":[1-9]/.test(log))
 
     // ---- no import or runtime errors in the runtime log
-    const errs = log.split('\n').filter((l) => /error|failed|not defined|Uncaught/i.test(l) && !/legacy_forward_failed/.test(l))
+    const errs = log.split('\n').filter((l) => /error|failed|not defined|Uncaught/i.test(l) && !/legacy_forward_failed|assistant_model_failed/.test(l))
     check('runtime log has no import/runtime errors', errs.length === 0, errs.slice(0, 2).join(' | ').slice(0, 300))
   } finally {
     serve?.kill()

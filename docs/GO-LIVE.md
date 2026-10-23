@@ -27,6 +27,7 @@ Regras deste roteiro:
 13b. Alterar serviço e duração, busca na agenda, Tarefa 13: backup, depois `supabase db push` (passo 19g)
 13c. Pacote no pagamento, confiabilidade da Thaís e ritmo das confirmações (Tarefa 10 desta rodada): backup, `supabase db push`, deploy de todas as funções do agente (passo 19h)
 13d. Confirmações independentes do modo da Thaís, Tarefa 14: `supabase db push` e deploy de `send-confirmations`, `wa-webhook`, `agent-run` e `wa-sweep` (passo 19i)
+13e. Assistente financeiro da dona, Tarefa 15: backup, `supabase db push` e deploy de `assistant-chat` (passo 19j)
 14. Agente em modo *Sombra*, depois *Teste* (passo 20)
 15. Agente em modo *No ar* (passo 21)
 
@@ -519,6 +520,40 @@ supabase functions deploy wa-sweep --no-verify-jwt
 
 3. **Publique o app** (passos 14 e 15): a página *Agente* mostra "Enviadas todos os dias, mesmo com a Thaís desligada." sob a chave, e a chave e o horário ficam editáveis em qualquer modo.
 4. **Conferir.** Com a Thaís em *Desligada*, a chave ligada e um agendamento elegível para amanhã (criado há mais de 3 horas), a confirmação sai dentro de 5 minutos depois do horário configurado. Se não quiser que saia agora, desligue a chave *Confirmações automáticas* antes de publicar.
+
+**19j. Assistente financeiro da dona (Tarefa 15).** Com o Supabase de produção já vinculado (passo 6). É um chat só da Karol, num botão flutuante em todas as páginas do app (a Thaís e as profissionais não têm acesso e nada nela muda). O assistente só consulta e propõe: cada ação aparece num cartão e só acontece depois de *Confirmar*; depois dá para *Desfazer*. Todo valor e toda data dos cartões vêm do banco, nunca do texto do modelo. Traz uma migration nova (`20261014120000_assistant.sql`), aditiva: as tabelas `assistant_messages` e `assistant_pending` (só a dona lê; só a função escreve), o ajuste `assistant_enabled` (ligado), a limpeza diária de registros com mais de 30 dias (`assistant-purge-old`), as funções de leitura `rpc_finance_entry_by_id` e `rpc_finance_find_duplicate` (só a dona) e a verificação **I26** em `check_invariants()`. Nenhum nome ou código de erro existente muda. Faça nesta ordem:
+
+1. **Backup** (passo 23) e depois **aplique a migration:**
+
+```powershell
+supabase db push
+```
+
+2. **Segredo.** A `ANTHROPIC_API_KEY` já existe (passo 8). Opcional: para usar outro modelo que não o padrão (`claude-haiku-4-5-20251001`), defina `ASSISTANT_MODEL`:
+
+```powershell
+$env:ASSISTANT_MODEL = Read-Host "Modelo do assistente (deixe em branco para o padrão)"
+```
+
+```powershell
+supabase secrets set ASSISTANT_MODEL=$env:ASSISTANT_MODEL
+```
+
+3. **Publique a função.** Ela confere o login (JWT) e se é a dona por dentro, por isso vai com `--no-verify-jwt`:
+
+```powershell
+supabase functions deploy assistant-chat --no-verify-jwt
+```
+
+4. **Publique o app** (passos 14 e 15). O botão só aparece para a dona e o chat é carregado só na primeira vez que ele é aberto.
+5. **Conferir.** Entre como a Karol: o botão aparece no canto da tela; entre como uma profissional: não aparece. Abra o chat e peça *Resumo de hoje*. Peça uma despesa pequena de teste, confirme e use *Desfazer*. O limite é de 30 mensagens a cada 10 minutos.
+6. **Desligar na hora, se precisar** (SQL Editor do Supabase; o chat passa a responder que está desativado):
+
+```sql
+update studio_settings set value = 'false' where key = 'assistant_enabled';
+```
+
+Para ligar de novo, use `'true'`.
 
 **20. Modo Teste com o seu telefone.** No app, *Agente*: em *Teste* adicione o seu número (com DDD) e escolha *Teste*. Mande mensagens do seu celular e confira:
 

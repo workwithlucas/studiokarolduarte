@@ -2,6 +2,7 @@
 // Not imported by tests. Logic lives in ../_shared/*.ts.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { safeEqual } from '../_shared/security.ts'
+import type { AssistantRuntime } from '../_shared/assistant.ts'
 import type { Db, Deps } from '../_shared/types.ts'
 
 declare const Deno: { env: { get(k: string): string | undefined }; serve: (h: (req: Request) => Response | Promise<Response>) => void }
@@ -34,8 +35,8 @@ export function authorized(req: Request): boolean {
   return safeEqual(req.headers.get('x-cron-secret'), env('CRON_SECRET')) || safeEqual(bearer, env('SUPABASE_SERVICE_ROLE_KEY'))
 }
 
-export function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+export function json(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } })
 }
 
 export function background(p: Promise<unknown>): void {
@@ -58,4 +59,27 @@ export async function invokeAgentRun(conversationId: string): Promise<void> {
     body: JSON.stringify({ conversation_id: conversationId }),
   })
   if (!res.ok) throw new Error(`agent-run HTTP ${res.status}`)
+}
+
+/** The finance assistant: service client for its own tables, JWT-scoped client for the finance RPCs. */
+export function buildAssistantRuntime(): AssistantRuntime {
+  const url = env('SUPABASE_URL') ?? ''
+  const svc = createClient(url, env('SUPABASE_SERVICE_ROLE_KEY') ?? '', { auth: { persistSession: false } })
+  return {
+    svc: svc as unknown as Db,
+    authenticate: async (jwt) => {
+      const { data, error } = await svc.auth.getUser(jwt)
+      return error || !data.user ? null : { id: data.user.id }
+    },
+    userDb: (jwt) =>
+      createClient(url, env('SUPABASE_ANON_KEY') ?? '', {
+        auth: { persistSession: false },
+        global: { headers: { Authorization: `Bearer ${jwt}` } },
+      }) as unknown as Db,
+    fetch: (input, init) => fetch(input, init),
+    now: () => Date.now(),
+    uuid: () => crypto.randomUUID(),
+    cfg: { anthropicKey: env('ANTHROPIC_API_KEY'), model: env('ASSISTANT_MODEL') || 'claude-haiku-4-5-20251001' },
+    log: (event, data) => console.log(JSON.stringify({ event, ...data })),
+  }
 }

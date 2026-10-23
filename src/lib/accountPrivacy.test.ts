@@ -13,7 +13,11 @@ function sources(dir: string): string[] {
 
 describe('agent: no credit or debt exposure', () => {
   const forbidden = /credit_balance|open_debt|client_account|rpc_get_client_account|rpc_settle_client_account|rpc_add_client_credit|v_client_account|saldo anterior|crédito da cliente|em aberto/i
-  const files = sources(DIR)
+  // The owner-only finance assistant (Task 15) is not the agent: it exists to show the owner credit and debt.
+  // The rule below is that Thaís's code never touches it, so the two sets stay apart (checked by the last test).
+  const OWNER_ASSISTANT = /[\\/](assistant[^\\/]*\.ts|errors-pt\.ts)$|[\\/]assistant-chat[\\/]/
+  const all = sources(DIR)
+  const files = all.filter((f) => !OWNER_ASSISTANT.test(f))
 
   it('finds the agent sources', () => {
     expect(files.length).toBeGreaterThan(5)
@@ -22,6 +26,12 @@ describe('agent: no credit or debt exposure', () => {
 
   it.each(files)('%s mentions no credit or debt value', (f) => {
     expect(readFileSync(f, 'utf8')).not.toMatch(forbidden)
+  })
+
+  it('no agent file imports the owner assistant or its shared error texts', () => {
+    for (const f of files.filter((x) => !x.includes('_deno'))) {
+      expect(readFileSync(f, 'utf8'), f).not.toMatch(/from '\.\.?\/(_shared\/)?(assistant[\w-]*|errors-pt)(\.ts)?'/)
+    }
   })
 
   it('the client-context migration only adds spend for owner/agent and nothing about credit', () => {
