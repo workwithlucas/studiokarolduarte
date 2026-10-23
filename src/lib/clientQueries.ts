@@ -213,3 +213,55 @@ export function usePackageSession(appointmentId: string, packageId: string | nul
     },
   })
 }
+
+/** Owner only: packages that could pay this appointment (same client and service, sessions left, valid that day). */
+export function useEligiblePackages(appointmentId: string | null | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ['eligible-packages', appointmentId],
+    enabled: enabled && !!appointmentId,
+    staleTime: 0,
+    queryFn: async () => rpc.eligiblePackages({ p_appointment_id: appointmentId! }),
+  })
+}
+
+/** Total of the package and the starts of its live appointments: enough to preview "sessão X/N". */
+export function usePackagePreview(packageId: string | null | undefined) {
+  return useQuery({
+    queryKey: ['package-appointments', 'preview', packageId],
+    enabled: !!packageId,
+    queryFn: async () => {
+      const [appts, pkg] = await Promise.all([
+        supabase.from('appointments').select('starts_at').eq('client_package_id', packageId!).in('status', ['scheduled', 'confirmed', 'completed']),
+        supabase.from('client_packages').select('sessions_total').eq('id', packageId!).maybeSingle(),
+      ])
+      fail(appts.error)
+      fail(pkg.error)
+      return { total: pkg.data?.sessions_total ?? 0, starts: (appts.data ?? []).map((a) => a.starts_at) }
+    },
+  })
+}
+
+export interface PackageAppointment {
+  id: string
+  starts_at: string
+  status: string
+  service: { name: string } | null
+  professional: { name: string; color: string } | null
+}
+
+/** Appointments linked to one package, by date. Staff-readable; no money. */
+export function usePackageAppointments(packageId: string | null | undefined) {
+  return useQuery({
+    queryKey: ['package-appointments', 'list', packageId],
+    enabled: !!packageId,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('id,starts_at,status,service:services(name),professional:professionals(name,color)')
+        .eq('client_package_id', packageId!)
+        .order('starts_at')
+      fail(error)
+      return (data ?? []) as unknown as PackageAppointment[]
+    },
+  })
+}

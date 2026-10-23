@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { Button, Chip, ChipRow, EmptyState, Input, Kicker, Pill, Skeleton, TabLabel, TabList, Toggle, useSnackbar, type PillTone } from '../components/ui'
 import { useDebounced } from '../features/clients/common'
-import { SellPackageSheet, TemplateSheet } from '../features/packages/PackageSheets'
+import { PackageSessionsSheet, SellPackageSheet, TemplateSheet, type PackageSummary } from '../features/packages/PackageSheets'
 import { useAllPackages, usePackageTemplates, type PackageTemplate } from '../lib/clientQueries'
 import { formatDate } from '../lib/datetime'
 import { toTitlePt } from '../lib/format'
@@ -135,6 +135,7 @@ function Active({ canVoid }: { canVoid: boolean }) {
   const [term, setTerm] = useState('')
   const debounced = useDebounced(fold(term.trim()), 250)
   const [voiding, setVoiding] = useState<string | null>(null)
+  const [sessions, setSessions] = useState<PackageSummary | null>(null)
 
   const rows = useMemo(
     () =>
@@ -188,13 +189,17 @@ function Active({ canVoid }: { canVoid: boolean }) {
                     <Link to={`/clientes/${r.client_id}`} className="title-serif block truncate text-lg">
                       {toTitlePt(r.client_name)}
                     </Link>
-                    <p className="text-help">{toTitlePt(r.template_name)}</p>
+                    <button type="button" aria-label={`Sessões do pacote de ${toTitlePt(r.client_name)}`} onClick={() => setSessions(r)} className="text-help text-left underline-offset-4 hover:underline">
+                      {toTitlePt(r.template_name)}
+                    </button>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Pill>
-                      restantes {r.remaining}/{r.sessions_total}
-                    </Pill>
-                    <Pill>vence {formatDate(r.expires_at)}</Pill>
+                    <button type="button" aria-label="Ver sessões do pacote" onClick={() => setSessions(r)} className="flex flex-wrap gap-2 rounded-full">
+                      <Pill>
+                        restantes {r.remaining}/{r.sessions_total}
+                      </Pill>
+                      <Pill>vence {formatDate(r.expires_at)}</Pill>
+                    </button>
                     <Pill tone={st.tone}>{st.label}</Pill>
                     {canVoid && (
                       <Button variant="danger" loading={voiding === r.client_package_id} onClick={() => void voidPackage(r.client_package_id)}>
@@ -208,6 +213,7 @@ function Active({ canVoid }: { canVoid: boolean }) {
           })}
         </ul>
       )}
+      <PackageSessionsSheet pkg={sessions} onClose={() => setSessions(null)} />
     </section>
   )
 }

@@ -1,4 +1,4 @@
-// Sends tomorrow's confirmation messages. Called every 15 minutes by pg_cron.
+// Sends tomorrow's confirmation messages. Called every 5 minutes by pg_cron.
 import { runConfirmations } from '../_shared/confirmations.ts'
 import { authorized, background, buildDeps, json, serve } from '../_deno/runtime.ts'
 

@@ -2,10 +2,11 @@
 // against this conversation's known client set: ownership is never delegated to the prompt.
 import type { ToolDef } from './anthropic.ts'
 import { callRpc, RpcFailure, unwrap, updateConversation } from './db.ts'
-import { argEnum, argText, argUuid, argUuidList, checkPendingGate, isKnownClient, PENDING_TTL_MS, type ArgResult } from './gates.ts'
-import { normalizePhone } from './phone.ts'
+import { argEnum, argText, argUuid, argUuidList, checkPendingGate, isKnownClient, PENDING_TTL_MS, resolveOption, type ArgResult } from './gates.ts'
+import { firstName, normalizePhone } from './phone.ts'
+import type { ConfirmedWrite, OptionRef, WriteKind } from './reply.ts'
 import { sha256Hex } from './security.ts'
-import { hhmm, humanSlot, isoOf, parseInstant, spParts, validYmd, addDays, weekdayName, ddmm } from './time.ts'
+import { isoOf, parseInstant, spParts, validYmd, addDays, slotLabel } from './time.ts'
 import type { Conversation, Deps, PendingAction, Settings } from './types.ts'
 
 export interface ToolCtx {
@@ -15,7 +16,25 @@ export interface ToolCtx {
   /** created_at of the newest inbound message in the snapshot the run started from (database clock). */
   snapshotLastInboundAt: string | null
   flags: { handoff: boolean; noted: boolean; booked: boolean }
+  /** Per-run reply state (created on first use). */
+  run?: RunState
 }
+
+/** What this run did: feeds the reply guards and the code-built reply. */
+export interface RunState {
+  writes: Set<WriteKind>
+  confirmed: ConfirmedWrite[]
+  /** get_availability, propose_* or list_my_appointments ran: day words are then forbidden in the model text. */
+  usedDayTools: boolean
+  toolLog: Array<{ name: string; ok: boolean; code?: string }>
+  /** Summary text of the proposal made in this run (expands the {resumo} token). */
+  summaryText: string | null
+  /** Extra tokens for facts shown in the context ({p1_vence}). */
+  facts: Record<string, string>
+}
+
+export const runOf = (ctx: Pick<ToolCtx, 'run'>): RunState =>
+  (ctx.run ??= { writes: new Set(), confirmed: [], usedDayTools: false, toolLog: [], summaryText: null, facts: {} })
 
 type Out = Record<string, unknown>
 const fail = (error: string, message: string): Out => ({ ok: false, error, message })
@@ -40,7 +59,7 @@ export const TOOL_DEFS: ToolDef[] = [
   { name: 'suggest_professionals', description: 'Profissionais que fazem o serviço, com a habitual da cliente primeiro.', input_schema: { type: 'object', properties: { service_id: uuid }, required: ['service_id'] } },
   {
     name: 'get_availability',
-    description: 'Horários livres (no máximo 3 dias e 6 horários por dia), em horário de São Paulo.',
+    description: 'Horários livres em até 3 dias, no máximo 12 opções. Devolve options [{token, label}]. Para falar de uma opção escreva SÓ o token entre chaves, por exemplo {o1}; o sistema troca pelo dia e hora. Nunca escreva horários, datas ou dias da semana.',
     input_schema: {
       type: 'object',
       properties: {
@@ -52,22 +71,22 @@ export const TOOL_DEFS: ToolDef[] = [
   },
   {
     name: 'propose_booking',
-    description: 'Propõe um agendamento (não grava ainda). O horário precisa estar na lista de get_availability. Devolve o resumo para apresentar à cliente.',
+    description: 'Propõe um agendamento (não grava ainda). A opção é o token devolvido por get_availability (vale 30 minutos). O sistema monta o resumo; escreva {resumo} para apresentá-lo à cliente. Se a cliente tem pacote do serviço, a sessão do pacote é usada automaticamente; passe use_package false só se ela recusar o pacote.',
     input_schema: {
       type: 'object',
       properties: {
-        client_id: uuid, professional_id: uuid, service_id: uuid, action: { type: 'string', enum: [...ACTIONS] },
-        addon_ids: { type: 'array', items: uuid }, starts_at: { type: 'string', description: 'starts_at exatamente como devolvido por get_availability' },
-        use_package: { type: 'boolean', description: 'true quando active_packages da cliente cobre este serviço: usa uma sessão do pacote' },
+        client_id: uuid, option: { type: 'string', description: 'token da opção, por exemplo o1' },
+        addon_ids: { type: 'array', items: uuid },
+        use_package: { type: 'boolean', description: 'false quando a cliente recusa usar o pacote' },
       },
-      required: ['client_id', 'professional_id', 'service_id', 'action', 'starts_at'],
+      required: ['client_id', 'option'],
     },
   },
-  { name: 'propose_reschedule', description: 'Propõe remarcar um agendamento da cliente (não grava ainda).', input_schema: { type: 'object', properties: { appointment_id: uuid, new_starts_at: { type: 'string' }, professional_id: uuid }, required: ['appointment_id', 'new_starts_at'] } },
+  { name: 'propose_reschedule', description: 'Propõe remarcar um agendamento da cliente (não grava ainda). A opção é o token de get_availability para o mesmo serviço.', input_schema: { type: 'object', properties: { appointment_id: uuid, option: { type: 'string', description: 'token da opção, por exemplo o1' } }, required: ['appointment_id', 'option'] } },
   { name: 'propose_cancel', description: 'Propõe cancelar um agendamento da cliente (não grava ainda).', input_schema: { type: 'object', properties: { appointment_id: uuid }, required: ['appointment_id'] } },
   { name: 'confirm_pending', description: 'Executa a proposta pendente. Só funciona depois que o resumo foi enviado E a cliente respondeu aceitando.', input_schema: { type: 'object', properties: {} } },
   { name: 'discard_pending', description: 'Descarta a proposta pendente (a cliente desistiu ou mudou).', input_schema: { type: 'object', properties: {} } },
-  { name: 'list_my_appointments', description: 'Próximos agendamentos das clientes conhecidas desta conversa.', input_schema: { type: 'object', properties: {} } },
+  { name: 'list_my_appointments', description: 'Próximos agendamentos das clientes conhecidas desta conversa: {id, label, service, professional}.', input_schema: { type: 'object', properties: {} } },
   { name: 'confirm_attendance', description: 'Confirma a presença da cliente em um horário que aguarda confirmação.', input_schema: { type: 'object', properties: { appointment_id: uuid }, required: ['appointment_id'] } },
   { name: 'note_for_karol', description: 'Deixa um recado para a Karol (dúvida sem resposta, referência enviada, etc.). A conversa continua com você.', input_schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
   { name: 'handoff_to_human', description: 'Passa a conversa para a equipe (saúde, reclamação, pagamento, desconto, negociação).', input_schema: { type: 'object', properties: { reason: { type: 'string' } }, required: ['reason'] } },
@@ -88,26 +107,33 @@ async function candidates(ctx: ToolCtx): Promise<ClientRow[]> {
   return (rows ?? []).filter((r) => !r.archived).map((r) => ({ id: r.id as string, name: r.name as string }))
 }
 
-/** Client context WITHOUT money: explicit whitelist, so a new money field can never leak through. */
-export async function safeClientContext(ctx: Pick<ToolCtx, 'deps'>, clientId: string): Promise<Out | null> {
+/** Client context WITHOUT money: explicit whitelist, so a new money field can never leak through. Times are labels. */
+export async function safeClientContext(ctx: Pick<ToolCtx, 'deps' | 'run'>, clientId: string): Promise<Out | null> {
   try {
     const c = await callRpc<Record<string, any>>(ctx.deps.db, 'rpc_get_client_context', { p_client_id: clientId })
     const pros = unwrap<Array<{ id: string; name: string }>>(await ctx.deps.db.from('professionals').select('id,name'))
     const nameOf = (id: unknown) => pros.find((p) => p.id === id)?.name ?? null
+    const now = ctx.deps.now()
+    const facts = runOf(ctx).facts
     return {
       client_id: c.client_id,
       name: c.name,
       segment: c.segment,
       visit_count: c.visit_count,
-      last_visit_at: c.last_visit_at,
+      last_visit: c.last_visit_at ? slotLabel(c.last_visit_at, now) : null,
       needs_return: c.needs_return,
       habitual_professional: c.preferred_professional_id ? { id: c.preferred_professional_id, name: nameOf(c.preferred_professional_id) } : null,
-      active_packages: c.active_packages ?? [],
+      // The expiry is written by the model as the token and expanded by code: it never writes a date itself.
+      active_packages: ((c.active_packages as Array<Record<string, any>>) ?? []).map((p, i) => {
+        const [y, m, d] = String(p.expires_at).slice(0, 10).split('-')
+        facts[`p${i + 1}_vence`] = `${d}/${m}/${y}`
+        return { client_package_id: p.client_package_id, template_name: p.template_name, service_id: p.service_id, remaining: p.remaining, vence_em: `{p${i + 1}_vence}` }
+      }),
       last_completed: ((c.last_completed as Array<Record<string, any>>) ?? []).map((a) => ({
-        when: humanSlot(parseInstant(a.starts_at) ?? 0), service: a.service_name, professional: nameOf(a.professional_id),
+        label: slotLabel(a.starts_at, now), service: a.service_name, professional: nameOf(a.professional_id),
       })),
       next_appointments: ((c.next_appointments as Array<Record<string, any>>) ?? []).map((a) => ({
-        id: a.id, when: humanSlot(parseInstant(a.starts_at) ?? 0), service: a.service_name, professional: nameOf(a.professional_id), status: a.status,
+        id: a.id, label: slotLabel(a.starts_at, now), service: a.service_name, professional: nameOf(a.professional_id), status: a.status,
       })),
     }
   } catch (e) {
@@ -141,7 +167,7 @@ function pickSpread<T>(items: T[], n: number): T[] {
 }
 
 interface ApptRow {
-  id: string; client_id: string; professional_id: string; service_id: string; action: string; status: string; starts_at: string
+  id: string; client_id: string; professional_id: string; service_id: string; action: string; status: string; starts_at: string; client_package_id: string | null
   service?: { name: string } | null; professional?: { name: string } | null
 }
 
@@ -149,7 +175,7 @@ async function ownedAppointment(ctx: ToolCtx, idArg: unknown): Promise<{ ok: tru
   const id = argUuid(idArg, 'appointment_id')
   if (!id.ok) return { ok: false, out: invalid(id) }
   const appt = unwrap<ApptRow | null>(
-    await ctx.deps.db.from('appointments').select('id,client_id,professional_id,service_id,action,status,starts_at,service:services(name),professional:professionals(name)').eq('id', id.value).maybeSingle(),
+    await ctx.deps.db.from('appointments').select('id,client_id,professional_id,service_id,action,status,starts_at,client_package_id,service:services(name),professional:professionals(name)').eq('id', id.value).maybeSingle(),
   )
   // Same answer whether it does not exist or belongs to someone else: nothing leaks.
   if (!appt || !isKnownClient(ctx.conv, appt.client_id)) return { ok: false, out: fail('NOT_FOUND', 'Agendamento não encontrado para esta cliente.') }
@@ -181,7 +207,18 @@ async function clearPending(ctx: ToolCtx): Promise<void> {
 const pending_msg = 'Proposta registrada. Apresente o resumo à cliente e aguarde a resposta dela; só então chame confirm_pending.'
 
 // ---------------------------------------------------------------- dispatcher
+const DAY_TOOLS = new Set(['get_availability', 'propose_booking', 'propose_reschedule', 'propose_cancel', 'list_my_appointments'])
+
+/** Runs a tool and records it in the run state (reply guards and the message meta read it). */
 export async function executeTool(ctx: ToolCtx, name: string, input: unknown): Promise<Out> {
+  const run = runOf(ctx)
+  if (DAY_TOOLS.has(name)) run.usedDayTools = true
+  const out = await dispatchTool(ctx, name, input)
+  run.toolLog.push({ name, ok: out.ok !== false, ...(out.ok === false ? { code: String(out.code ?? out.error ?? '') } : {}) })
+  return out
+}
+
+async function dispatchTool(ctx: ToolCtx, name: string, input: unknown): Promise<Out> {
   const args = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
   try {
     switch (name) {
@@ -312,47 +349,89 @@ async function suggestProfessionals(ctx: ToolCtx, a: Record<string, unknown>): P
 }
 
 // ---------------------------------------------------------------- availability
+export const MAX_OPTION_DAYS = 3
+export const MAX_OPTIONS = 12
+
 async function getAvailability(ctx: ToolCtx, a: Record<string, unknown>): Promise<Out> {
   const pro = argUuid(a.professional_id, 'professional_id')
   const svc = argUuid(a.service_id, 'service_id')
   const act = argEnum(a.action, ACTIONS, 'action')
   const addons = argUuidList(a.addon_ids, 'addon_ids')
   for (const r of [pro, svc, act, addons]) if (!r.ok) return invalid(r)
-  const today = spParts(ctx.deps.now()).ymd
+  const now = ctx.deps.now()
+  const today = spParts(now).ymd
   let from = validYmd(a.from_date)
   let to = validYmd(a.to_date)
   if (!from || !to) return fail('INVALID_ARGUMENT', 'from_date e to_date devem ser YYYY-MM-DD')
   if (from < today) from = today
   if (to < from) return fail('INVALID_ARGUMENT', 'to_date deve ser depois de from_date')
   if (to > addDays(from, 21)) to = addDays(from, 21)
-  const slots = await fetchSlots(ctx, { professionalId: (pro as any).value, serviceId: (svc as any).value, action: (act as any).value, addonIds: (addons as any).value }, from, to)
+  const q: SlotQuery = { professionalId: (pro as any).value, serviceId: (svc as any).value, action: (act as any).value, addonIds: (addons as any).value }
+  const slots = await fetchSlots(ctx, q, from, to)
   const byDay = new Map<string, typeof slots>()
   for (const s of slots) {
     const d = spParts(s.ms).ymd
     byDay.set(d, [...(byDay.get(d) ?? []), s])
   }
-  const days = [...byDay.entries()].slice(0, 3).map(([date, list]) => ({
-    date, weekday: weekdayName(spParts(list[0]!.ms).weekday), label: ddmm(date),
-    slots: pickSpread(list, 6).map((s) => ({ starts_at: s.starts_at, time: hhmm(s.ms) })),
+  const days = [...byDay.values()].slice(0, MAX_OPTION_DAYS)
+  const perDay = Math.max(1, Math.min(6, Math.floor(MAX_OPTIONS / Math.max(1, days.length))))
+  const picked = days.flatMap((list) => pickSpread(list, perDay)).slice(0, MAX_OPTIONS)
+  const options: OptionRef[] = picked.map((s, i) => ({
+    token: `o${i + 1}`, professional_id: q.professionalId, service_id: q.serviceId, action: q.action, starts_at: s.starts_at, label: slotLabel(s.ms, now),
   }))
-  return { ok: true, days, note: days.length ? undefined : 'Sem horários livres neste período. Tente outras datas.' }
+  // The resolved options are stored; the model only ever sees tokens and labels.
+  await updateConversation(ctx.deps.db, ctx.conv.id, { last_options: options, options_at: isoOf(now) })
+  ctx.conv.last_options = options
+  ctx.conv.options_at = isoOf(now)
+  return {
+    ok: true,
+    options: options.map((o) => ({ token: o.token, label: o.label })),
+    note: options.length ? 'Para falar de uma opção escreva só o token entre chaves, por exemplo {o1}.' : 'Sem horários livres neste período. Tente outras datas.',
+  }
 }
 
 // ---------------------------------------------------------------- proposals
+/** A stored option no older than 30 minutes, or the error the model receives. */
+function optionOrError(ctx: ToolCtx, token: unknown): { ok: true; option: OptionRef } | { ok: false; out: Out } {
+  const r = resolveOption(ctx.conv, token, ctx.deps.now())
+  if (r.ok) return r
+  if (r.code === 'OPTION_EXPIRED') return { ok: false, out: { ok: false, error: 'OPTION_EXPIRED', code: 'OPTION_EXPIRED', next: 'call get_availability again' } }
+  return { ok: false, out: fail('INVALID_ARGUMENT', r.message) }
+}
+
+interface PkgRow { client_package_id: string; template_name: string; remaining: number; expires_at: string; status: string }
+
+/** Packages of this (known) client for the service, read from the database (never from the model). */
+async function packagesFor(ctx: ToolCtx, clientId: string, serviceId: string): Promise<PkgRow[]> {
+  const rows = unwrap<PkgRow[] | null>(
+    await ctx.deps.db.from('v_client_packages').select('client_package_id,template_name,remaining,expires_at,status').eq('client_id', clientId).eq('service_id', serviceId).order('expires_at'),
+  )
+  return rows ?? []
+}
+
+/** The package a booking on this day would use, or why none can be used (a line for the summary). */
+export function pickPackage(pkgs: PkgRow[], ymd: string, serviceName: string): { use: PkgRow | null; note: string | null } {
+  const use = pkgs.find((p) => p.remaining > 0 && String(p.expires_at).slice(0, 10) >= ymd) ?? null
+  if (use || !pkgs.length) return { use, note: null }
+  if (pkgs.some((p) => p.remaining > 0)) return { use: null, note: `Seu pacote de ${serviceName} não pode ser usado nessa data.` }
+  return { use: null, note: `Seu pacote de ${serviceName} já usou todas as sessões.` }
+}
+
 async function proposeBooking(ctx: ToolCtx, a: Record<string, unknown>): Promise<Out> {
   const client = argUuid(a.client_id, 'client_id')
-  const pro = argUuid(a.professional_id, 'professional_id')
-  const svc = argUuid(a.service_id, 'service_id')
-  const act = argEnum(a.action, ACTIONS, 'action')
   const addons = argUuidList(a.addon_ids, 'addon_ids')
-  for (const r of [client, pro, svc, act, addons]) if (!r.ok) return invalid(r)
+  for (const r of [client, addons]) if (!r.ok) return invalid(r)
   if (a.use_package !== undefined && a.use_package !== null && typeof a.use_package !== 'boolean') return fail('INVALID_ARGUMENT', 'use_package deve ser verdadeiro ou falso')
   const clientId = (client as any).value as string
   if (!isKnownClient(ctx.conv, clientId)) return fail('NOT_ALLOWED', 'Esta cliente não pertence a esta conversa. Use lookup_client / choose_client.')
-  const startsMs = parseInstant(a.starts_at)
-  if (startsMs === null || startsMs <= ctx.deps.now()) return fail('INVALID_ARGUMENT', 'starts_at inválido')
-  const q: SlotQuery = { professionalId: (pro as any).value, serviceId: (svc as any).value, action: (act as any).value, addonIds: (addons as any).value }
-  if (!(await slotOffered(ctx, q, startsMs))) return fail('SLOT_NOT_OFFERED', 'Este horário não está na lista de disponibilidade. Use get_availability e escolha um horário da lista.')
+  const opt = optionOrError(ctx, a.option)
+  if (!opt.ok) return opt.out
+  const o = opt.option
+  const now = ctx.deps.now()
+  const startsMs = parseInstant(o.starts_at)
+  if (startsMs === null || startsMs <= now) return fail('OPTION_EXPIRED', 'Esta opção já passou. Use get_availability de novo.')
+  const q: SlotQuery = { professionalId: o.professional_id, serviceId: o.service_id, action: o.action, addonIds: (addons as any).value }
+  if (!(await slotOffered(ctx, q, startsMs))) return fail('SLOT_NOT_OFFERED', 'Este horário não está mais livre. Use get_availability e escolha uma opção da lista.')
 
   const db = ctx.deps.db
   const s = unwrap<Record<string, any> | null>(await db.from('services').select('id,name,kind,duration_min,price_cents,maintenance_duration_min,maintenance_price_cents,active').eq('id', q.serviceId).maybeSingle())
@@ -365,56 +444,51 @@ async function proposeBooking(ctx: ToolCtx, a: Record<string, unknown>): Promise
   const price = base + ads.reduce((n, x) => n + x.price_delta_cents, 0)
   const dur = (q.action === 'maintenance' ? (s.maintenance_duration_min ?? s.duration_min) : s.duration_min) + ads.reduce((n, x) => n + x.duration_delta_min, 0)
 
-  // Package session: the client's packages are re-read from the database, never taken from the model.
-  let pkg: { id: string; remaining: number } | null = null
-  if (a.use_package === true) {
-    const found = await findPackage(ctx, clientId, q.serviceId, spParts(startsMs).ymd)
-    if (!found.ok) return found.out
-    pkg = found.pkg
-  }
+  // Package default: used whenever an eligible one exists, unless the client declined it (use_package false).
+  const { use, note } = pickPackage(await packagesFor(ctx, clientId, q.serviceId), spParts(startsMs).ymd, s.name)
+  const pkg = a.use_package === false ? null : use
+  const label = slotLabel(startsMs, now)
+  const money = pkg ? `vai usar uma sessão do seu pacote (restam ${pkg.remaining - 1})` : formatBRL(price)
   const summary: Record<string, unknown> = {
-    servico: s.name, acao: q.action, adicionais: ads.map((x) => x.name), dia_e_hora: humanSlot(startsMs), profissional: p.name,
-    duracao_min: dur,
-    ...(pkg ? { pacote: `vai usar uma sessão do seu pacote (restam ${pkg.remaining - 1})` } : { valor: formatBRL(price) }),
+    servico: s.name, acao: q.action, adicionais: ads.map((x) => x.name), label, profissional: p.name, duracao_min: dur,
+    ...(pkg ? { pacote: money } : { valor: money }),
+    ...(a.use_package !== false && !use && note ? { aviso_pacote: note } : {}),
   }
+  const text =
+    `${s.name}${ads.length ? ` (${ads.map((x) => x.name).join(', ')})` : ''} com ${p.name} ${label}. ` +
+    (pkg ? `Vai usar uma sessão do seu pacote (restam ${pkg.remaining - 1}).` : `Valor: ${money}.`) +
+    (a.use_package !== false && !use && note ? ` ${note}` : '')
+  summary.texto = text
+  runOf(ctx).summaryText = text
   await writePending(ctx, 'book', {
     client_id: clientId, professional_id: q.professionalId, service_id: q.serviceId, action: q.action, addon_ids: q.addonIds, starts_at: isoOf(startsMs),
-    ...(pkg ? { client_package_id: pkg.id } : {}),
+    ...(pkg ? { client_package_id: pkg.client_package_id } : {}),
   }, summary)
   return { ok: true, summary, next: pending_msg }
-}
-
-/** An active package of this (known) client that covers the service on the booking day, with sessions left. */
-async function findPackage(ctx: ToolCtx, clientId: string, serviceId: string, ymd: string): Promise<{ ok: true; pkg: { id: string; remaining: number } } | { ok: false; out: Out }> {
-  const c = await callRpc<Record<string, any>>(ctx.deps.db, 'rpc_get_client_context', { p_client_id: clientId })
-  const covering = ((c.active_packages as Array<Record<string, any>>) ?? []).filter((p) => p.service_id === serviceId)
-  if (!covering.length) return { ok: false, out: fail('PACKAGE_INVALID', 'A cliente não tem pacote ativo para este serviço.') }
-  const withSessions = covering.filter((p) => p.remaining > 0)
-  if (!withSessions.length) return { ok: false, out: fail('PACKAGE_EMPTY', 'O pacote não tem mais sessões.') }
-  const valid = withSessions.find((p) => String(p.expires_at).slice(0, 10) >= ymd)
-  if (!valid) return { ok: false, out: fail('PACKAGE_EXPIRED', 'O pacote vence antes da data escolhida.') }
-  return { ok: true, pkg: { id: valid.client_package_id as string, remaining: valid.remaining as number } }
 }
 
 async function proposeReschedule(ctx: ToolCtx, a: Record<string, unknown>): Promise<Out> {
   const owned = await ownedAppointment(ctx, a.appointment_id)
   if (!owned.ok) return owned.out
   const { appt } = owned
-  const newMs = parseInstant(a.new_starts_at)
-  if (newMs === null || newMs <= ctx.deps.now()) return fail('INVALID_ARGUMENT', 'new_starts_at inválido')
-  let proId = appt.professional_id
-  if (a.professional_id !== undefined && a.professional_id !== null) {
-    const p = argUuid(a.professional_id, 'professional_id')
-    if (!p.ok) return invalid(p)
-    proId = p.value
+  const opt = optionOrError(ctx, a.option)
+  if (!opt.ok) return opt.out
+  const o = opt.option
+  if (o.service_id !== appt.service_id || o.action !== appt.action) {
+    return fail('INVALID_ARGUMENT', 'Esta opção é de outro serviço. Chame get_availability com o serviço e a ação deste agendamento.')
   }
-  const q: SlotQuery = { professionalId: proId, serviceId: appt.service_id, action: appt.action, addonIds: await addonIdsOf(ctx, appt.id) }
-  if (!(await slotOffered(ctx, q, newMs))) return fail('SLOT_NOT_OFFERED', 'Este horário não está na lista de disponibilidade. Use get_availability e escolha um horário da lista.')
-  const p = unwrap<Record<string, any> | null>(await ctx.deps.db.from('professionals').select('name').eq('id', proId).maybeSingle())
-  const summary = {
-    servico: appt.service?.name ?? null, de: humanSlot(parseInstant(appt.starts_at) ?? 0), para: humanSlot(newMs), profissional: p?.name ?? null,
-  }
-  await writePending(ctx, 'reschedule', { appointment_id: appt.id, new_starts_at: isoOf(newMs), professional_id: proId }, summary)
+  const now = ctx.deps.now()
+  const newMs = parseInstant(o.starts_at)
+  if (newMs === null || newMs <= now) return fail('OPTION_EXPIRED', 'Esta opção já passou. Use get_availability de novo.')
+  const q: SlotQuery = { professionalId: o.professional_id, serviceId: appt.service_id, action: appt.action, addonIds: await addonIdsOf(ctx, appt.id) }
+  if (!(await slotOffered(ctx, q, newMs))) return fail('SLOT_NOT_OFFERED', 'Este horário não está mais livre. Use get_availability e escolha uma opção da lista.')
+  const p = unwrap<Record<string, any> | null>(await ctx.deps.db.from('professionals').select('name').eq('id', o.professional_id).maybeSingle())
+  const from = slotLabel(appt.starts_at, now)
+  const to = slotLabel(newMs, now)
+  const text = `Remarcar ${appt.service?.name ?? 'o atendimento'} de ${from} para ${to}${p?.name ? ` com ${p.name}` : ''}.`
+  const summary = { servico: appt.service?.name ?? null, de: from, para: to, profissional: p?.name ?? null, texto: text }
+  runOf(ctx).summaryText = text
+  await writePending(ctx, 'reschedule', { appointment_id: appt.id, new_starts_at: isoOf(newMs), professional_id: o.professional_id }, summary)
   return { ok: true, summary, next: pending_msg }
 }
 
@@ -422,7 +496,10 @@ async function proposeCancel(ctx: ToolCtx, a: Record<string, unknown>): Promise<
   const owned = await ownedAppointment(ctx, a.appointment_id)
   if (!owned.ok) return owned.out
   const { appt } = owned
-  const summary = { servico: appt.service?.name ?? null, dia_e_hora: humanSlot(parseInstant(appt.starts_at) ?? 0), profissional: appt.professional?.name ?? null }
+  const label = slotLabel(appt.starts_at, ctx.deps.now())
+  const text = `Cancelar ${appt.service?.name ?? 'o atendimento'} com ${appt.professional?.name ?? 'a profissional'} ${label}.` + (appt.client_package_id ? ' A sessão do pacote volta para você.' : '')
+  const summary = { servico: appt.service?.name ?? null, label, profissional: appt.professional?.name ?? null, ...(appt.client_package_id ? { pacote: 'a sessão do pacote volta para você' } : {}), texto: text }
+  runOf(ctx).summaryText = text
   await writePending(ctx, 'cancel', { appointment_id: appt.id }, summary)
   return { ok: true, summary, next: pending_msg }
 }
@@ -436,6 +513,9 @@ async function confirmPending(ctx: ToolCtx): Promise<Out> {
   }
   const p = pending as PendingAction
   const db = ctx.deps.db
+  const run = runOf(ctx)
+  const now = ctx.deps.now()
+  const done = { next: 'Feito e confirmado pelo sistema. A mensagem final é montada pelo sistema: não escreva detalhes do atendimento.' }
   try {
     if (p.type === 'book') {
       const prm = p.params as Record<string, any>
@@ -448,7 +528,18 @@ async function confirmPending(ctx: ToolCtx): Promise<Out> {
       })
       ctx.flags.booked = true
       await clearPending(ctx)
-      return { ok: true, type: 'book', appointment_id: id, summary: p.summary }
+      let remaining: number | null = null
+      if (prm.client_package_id) {
+        const left = unwrap<{ remaining: number } | null>(await db.from('v_client_packages').select('remaining').eq('client_package_id', prm.client_package_id).maybeSingle())
+        remaining = left?.remaining ?? null
+      }
+      const who = unwrap<{ name: string } | null>(await db.from('clients').select('name').eq('id', prm.client_id).maybeSingle())
+      run.writes.add('book')
+      run.confirmed.push({
+        kind: 'book', clientName: who?.name ? firstName(who.name) || null : null, service: String(p.summary.servico ?? ''), professional: String(p.summary.profissional ?? ''),
+        label: slotLabel(prm.starts_at, now), packageRemaining: prm.client_package_id ? (remaining ?? 0) : null,
+      })
+      return { ok: true, type: 'book', appointment_id: id, ...done }
     }
     const owned = await ownedAppointment(ctx, (p.params as Record<string, unknown>).appointment_id)
     if (!owned.ok) {
@@ -459,18 +550,22 @@ async function confirmPending(ctx: ToolCtx): Promise<Out> {
       await callRpc(db, 'rpc_reschedule_appointment', {
         p_appointment_id: owned.appt.id, p_new_starts_at: p.params.new_starts_at, p_new_professional_id: p.params.professional_id ?? null,
       })
+      run.writes.add('reschedule')
+      run.confirmed.push({ kind: 'reschedule', service: owned.appt.service?.name ?? String(p.summary.servico ?? ''), label: slotLabel(String(p.params.new_starts_at), now) })
     } else {
       await callRpc(db, 'rpc_cancel_appointment', { p_appointment_id: owned.appt.id, p_reason: 'Cliente cancelou pelo WhatsApp' })
+      run.writes.add('cancel')
+      run.confirmed.push({ kind: 'cancel', service: owned.appt.service?.name ?? String(p.summary.servico ?? ''), label: slotLabel(owned.appt.starts_at, now), package: !!owned.appt.client_package_id })
     }
     await clearPending(ctx)
-    return { ok: true, type: p.type, appointment_id: owned.appt.id, summary: p.summary }
+    return { ok: true, type: p.type, appointment_id: owned.appt.id, ...done }
   } catch (e) {
     if (e instanceof RpcFailure) {
       await clearPending(ctx) // the proposal is stale after any rule violation: propose again
       if (e.code === 'PACKAGE_EMPTY' || e.code === 'PACKAGE_EXPIRED' || e.code === 'PACKAGE_INVALID') {
         return {
           ...fail(e.code, e.detail ?? e.code),
-          next: 'O pacote não pode ser usado. Diga à cliente que o pacote não tem sessões disponíveis, proponha o agendamento pago (propose_booking sem use_package) e chame note_for_karol.',
+          next: 'O pacote não pode ser usado. Diga à cliente que o pacote não tem sessões disponíveis, proponha o agendamento pago (propose_booking com use_package false) e chame note_for_karol.',
         }
       }
       return fail(e.code, e.detail ?? e.code)
@@ -484,16 +579,14 @@ async function listMyAppointments(ctx: ToolCtx): Promise<Out> {
   if (!ctx.conv.known_client_ids.length) return { ok: true, appointments: [] }
   const rows = unwrap<Array<Record<string, any>>>(
     await ctx.deps.db.from('appointments')
-      .select('id,client_id,starts_at,status,action,service:services(name),professional:professionals(name),client:clients(name)')
+      .select('id,client_id,starts_at,status,action,service:services(name),professional:professionals(name)')
       .in('client_id', ctx.conv.known_client_ids).in('status', ['scheduled', 'confirmed'])
       .gte('starts_at', isoOf(ctx.deps.now())).order('starts_at').limit(10),
   )
+  const now = ctx.deps.now()
   return {
     ok: true,
-    appointments: (rows ?? []).map((r) => ({
-      id: r.id, client: r.client?.name ?? null, service: r.service?.name ?? null, professional: r.professional?.name ?? null,
-      when: humanSlot(parseInstant(r.starts_at) ?? 0), status: r.status,
-    })),
+    appointments: (rows ?? []).map((r) => ({ id: r.id, label: slotLabel(r.starts_at, now), service: r.service?.name ?? null, professional: r.professional?.name ?? null })),
   }
 }
 
@@ -502,12 +595,20 @@ async function confirmAttendance(ctx: ToolCtx, a: Record<string, unknown>): Prom
   if (!id.ok) return invalid(id)
   const db = ctx.deps.db
   const conf = unwrap<{ appointment_id: string } | null>(await db.from('wa_confirmations').select('appointment_id').eq('appointment_id', id.value).maybeSingle())
-  const appt = unwrap<{ id: string; client_id: string; status: string } | null>(await db.from('appointments').select('id,client_id,status').eq('id', id.value).maybeSingle())
+  const appt = unwrap<{ id: string; client_id: string; status: string; starts_at: string } | null>(await db.from('appointments').select('id,client_id,status,starts_at').eq('id', id.value).maybeSingle())
   if (!conf || !appt || !isKnownClient(ctx.conv, appt.client_id)) return fail('NOT_ALLOWED', 'Este horário não está aguardando confirmação nesta conversa.')
-  if (appt.status === 'confirmed') return { ok: true, already: true }
+  const run = runOf(ctx)
+  const note = { next: 'Confirmado pelo sistema. A mensagem final é montada pelo sistema: não escreva detalhes do atendimento.' }
+  if (appt.status === 'confirmed') {
+    run.writes.add('confirm')
+    run.confirmed.push({ kind: 'confirm', label: slotLabel(appt.starts_at, ctx.deps.now()) })
+    return { ok: true, already: true, ...note }
+  }
   if (appt.status !== 'scheduled') return fail('BAD_TRANSITION', 'Este horário não pode mais ser confirmado.')
   await callRpc(db, 'rpc_confirm_appointment', { p_appointment_id: appt.id })
-  return { ok: true }
+  run.writes.add('confirm')
+  run.confirmed.push({ kind: 'confirm', label: slotLabel(appt.starts_at, ctx.deps.now()) })
+  return { ok: true, ...note }
 }
 
 // ---------------------------------------------------------------- escalation

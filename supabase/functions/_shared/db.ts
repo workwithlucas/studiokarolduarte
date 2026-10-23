@@ -27,6 +27,9 @@ export async function callRpc<T = any>(db: Db, fn: string, args: Record<string, 
 const isTime = (v: unknown): v is string => typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v)
 const isInt = (v: unknown, lo: number, hi: number): v is number => typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi
 
+/** max is never below min. */
+const delays = (min: number, max: number) => ({ confirmation_delay_min_s: min, confirmation_delay_max_s: Math.max(min, max) })
+
 /** Pure: builds a Settings object from studio_settings rows, falling back to defaults on anything invalid. */
 export function parseSettings(rows: Array<{ key: string; value: unknown }>): Settings {
   const m = new Map(rows.map((r) => [r.key, r.value]))
@@ -49,6 +52,7 @@ export function parseSettings(rows: Array<{ key: string; value: unknown }>): Set
     history_messages: num('history_messages', d.history_messages, 4, 30),
     retention_days: num('retention_days', d.retention_days, 1, 90),
     debounce_seconds: num('debounce_seconds', d.debounce_seconds, 3, 30),
+    ...delays(num('confirmation_delay_min_s', d.confirmation_delay_min_s, 0, 120), num('confirmation_delay_max_s', d.confirmation_delay_max_s, 0, 120)),
   }
 }
 
@@ -70,7 +74,7 @@ export function modeRuns(settings: Settings, phone: string): boolean {
 }
 
 const CONV_COLS =
-  'id,phone_e164,client_id,known_client_ids,mode,human_until,pending_since,last_inbound_at,last_outbound_at,lease_until,away_sent_at,pending_action,needs_attention,attention_reason,failed_runs,audio_failures'
+  'id,phone_e164,client_id,known_client_ids,mode,human_until,pending_since,last_inbound_at,last_outbound_at,lease_until,away_sent_at,pending_action,needs_attention,attention_reason,failed_runs,audio_failures,last_options,options_at'
 
 export async function getConversation(db: Db, id: string): Promise<Conversation | null> {
   const r = unwrap<Conversation | null>(await db.from('wa_conversations').select(CONV_COLS).eq('id', id).maybeSingle())

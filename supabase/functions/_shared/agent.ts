@@ -10,13 +10,15 @@ import { awayDue } from './gates.ts'
 import { KB } from './kb.ts'
 import { getGateState, recordDecision, sendReply, type ReplyOutcome } from './outbound.ts'
 import { PERSONA } from './prompt.ts'
-import { executeTool, TOOL_DEFS, type ToolCtx } from './tools.ts'
+import { addressLineOf, confirmedReply, correctionNote, expandTokens, FALLBACK_TEXT, findViolations, optionTokens, type Violation } from './reply.ts'
+import { executeTool, runOf, TOOL_DEFS, type ToolCtx } from './tools.ts'
 import { inWindow, isoOf } from './time.ts'
 import type { Deps } from './types.ts'
 
 export const MAX_ITERATIONS = 6
 export const RUN_BUDGET_MS = 60_000
 export const HANDOFF_TEXT = 'Vou pedir para a Karol falar com você por aqui, tá bem?'
+export { FALLBACK_TEXT }
 
 export interface RunOutcome {
   status: 'sent' | 'not_claimed' | 'skipped' | 'away' | 'handoff' | 'silent' | 'blocked' | 'failed' | 'shadow' | 'breaker'
@@ -135,6 +137,7 @@ async function runRound(deps: Deps, id: string, lastRound: boolean): Promise<Run
     if (!messages.length || messages[messages.length - 1]!.role !== 'user') return { status: 'skipped', reason: 'no_user_turn' }
 
     const ctx: ToolCtx = { deps, conv, settings, snapshotLastInboundAt: lastIn.created_at, flags: { handoff: false, noted: false, booked: false } }
+    runOf(ctx)
     const system: TextBlock[] = [
       { type: 'text', text: `${PERSONA}\n\n${KB}`, cache_control: { type: 'ephemeral' } },
       { type: 'text', text: await buildDynamicBlock(ctx) },
@@ -152,38 +155,78 @@ async function runRound(deps: Deps, id: string, lastRound: boolean): Promise<Run
     }
 
     // At most MAX_ITERATIONS rounds of tool use; after the last round one closing call (tools disabled) must
-    // produce the text. Still asking for tools there means the run is broken.
-    let text: string | null = null
-    for (let i = 0; i <= MAX_ITERATIONS && text === null; i++) {
-      const closing = i === MAX_ITERATIONS
-      const res = await call(closing ? { tool_choice: { type: 'none' } } : {})
-      const uses = res.content.filter((b): b is Extract<typeof b, { type: 'tool_use' }> => b.type === 'tool_use')
-      if (closing && uses.length) break // still asking for tools after the limit: text stays null -> run fails
-      if (res.stop_reason === 'tool_use' && uses.length) {
-        messages.push({ role: 'assistant', content: res.content })
-        const results: ToolResultBlock[] = []
-        for (const u of uses) {
-          const out = await executeTool(ctx, u.name, u.input)
-          results.push({ type: 'tool_result', tool_use_id: u.id, content: JSON.stringify(out), ...(out.ok === false ? { is_error: true } : {}) })
+    // produce the text. Still asking for tools there means the run is broken. A regeneration (corrective note)
+    // runs the same loop, so the model can call the tool it just promised instead of promising it.
+    const generate = async (note?: string): Promise<string> => {
+      const sys = note ? [...system, { type: 'text' as const, text: note }] : system
+      for (let i = 0; i <= MAX_ITERATIONS; i++) {
+        const closing = i === MAX_ITERATIONS
+        const res = await call({ system: sys, ...(closing ? { tool_choice: { type: 'none' as const } } : {}) })
+        const uses = res.content.filter((b): b is Extract<typeof b, { type: 'tool_use' }> => b.type === 'tool_use')
+        if (closing && uses.length) break // still asking for tools after the limit
+        if (res.stop_reason === 'tool_use' && uses.length) {
+          messages.push({ role: 'assistant', content: res.content })
+          const results: ToolResultBlock[] = []
+          for (const u of uses) {
+            const out = await executeTool(ctx, u.name, u.input)
+            results.push({ type: 'tool_result', tool_use_id: u.id, content: JSON.stringify(out), ...(out.ok === false ? { is_error: true } : {}) })
+          }
+          messages.push({ role: 'user', content: results })
+        } else {
+          return textOf(res)
         }
-        messages.push({ role: 'user', content: results })
-      } else {
-        text = textOf(res)
       }
+      throw new Error('tool loop exceeded the iteration limit')
     }
-    if (text === null) throw new Error('tool loop exceeded the iteration limit')
 
-    // Forbidden phrases: regenerate once with a corrective note, then drop what still matches.
+    const run = runOf(ctx)
+    const guardInput = () => ({
+      usedDayTools: run.usedDayTools,
+      writes: run.writes,
+      tokens: { ...optionTokens(ctx.conv.last_options ?? []), ...run.facts, ...(run.summaryText ? { resumo: run.summaryText } : {}) },
+    })
+    const rulesOf = (v: Violation[]) => [...new Set(v.map((x) => x.rule))].join(', ')
+
+    let text = await generate()
+    let guard: 'none' | 'regenerated' | 'fallback' = 'none'
     let blocked = false
-    if (hasForbiddenPhrase(text)) {
-      const retry = await call({ system: [...system, { type: 'text', text: CORRECTION }], tool_choice: { type: 'none' } })
-      text = textOf(retry)
+    let parts: string[] = []
+
+    if (!run.confirmed.length) {
+      // Forbidden phrases: regenerate once with a corrective note, then drop what still matches.
       if (hasForbiddenPhrase(text)) {
-        text = dropForbiddenSentences(text)
-        blocked = text === ''
+        const retry = await call({ system: [...system, { type: 'text', text: CORRECTION }], tool_choice: { type: 'none' } })
+        text = textOf(retry)
+        if (hasForbiddenPhrase(text)) {
+          text = dropForbiddenSentences(text)
+          blocked = text === ''
+        }
+      }
+      // Reply guards: times, dates, day words, claims, promises and tokens. One regeneration, then the fallback.
+      const first = findViolations(text, guardInput())
+      if (first.length) {
+        guard = 'regenerated'
+        text = await generate(correctionNote(first))
       }
     }
-    const parts = formatReply(text)
+
+    if (run.confirmed.length) {
+      parts = confirmedReply(run.confirmed, addressLineOf(KB)) // built by code; the model text is dropped
+    } else {
+      const left = findViolations(text, guardInput())
+      if (left.length) {
+        guard = 'fallback'
+        const why = `Resposta reprovada pelas regras (${rulesOf(left)}): ${left.map((x) => x.match).join(', ')}`.slice(0, 290)
+        await executeTool(ctx, 'discard_pending', {})
+        await executeTool(ctx, 'handoff_to_human', { reason: why })
+        await executeTool(ctx, 'note_for_karol', { text: why })
+        parts = [FALLBACK_TEXT]
+      } else {
+        // The proposal summary is built by code and always reaches the client, with or without the {resumo} token.
+        const withSummary = run.summaryText && !/\{resumo\}/.test(text) ? `{resumo}\n${text}` : text
+        parts = formatReply(expandTokens(withSummary, guardInput().tokens))
+      }
+    }
 
     if (parts.length === 0) {
       await recordDecision(db, { messageId, conversationId: id, inboundAt, action: 'no_reply', reason: blocked ? 'blocked' : 'silent', ...snap })
@@ -196,6 +239,7 @@ async function runRound(deps: Deps, id: string, lastRound: boolean): Promise<Run
     const r = await sendReply(deps, {
       conversationId: id, phone: conv.phone_e164, messageId, inboundAt, headAtStart, parts,
       purpose: handoff ? 'handoff' : 'reply', action: handoff ? 'handoff' : 'replied', reason: handoff ? 'handoff_to_human' : 'reply', decisionId,
+      meta: { tools: run.toolLog, guard },
     })
     if (r.status === 'sent') {
       // The summary reached the client: from now on a later inbound may confirm it.

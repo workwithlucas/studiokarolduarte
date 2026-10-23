@@ -2,20 +2,24 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Plus, X } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Button, Chip, ChipRow, FieldLabel, Input, Kicker, MoneyInput, Sheet, useSnackbar } from '../../components/ui'
-import { toSaoPauloISO } from '../../lib/datetime'
+import { useEligiblePackages, usePackagePreview } from '../../lib/clientQueries'
+import { formatDate, toSaoPauloISO } from '../../lib/datetime'
 import { creditExceeded, creditLineLimit, CREDIT_METHOD, linesPayload, PAY_METHODS, paymentMath, type PayLine, type PayMethod } from '../../lib/finance'
 import { useClientAccountSummary } from '../../lib/financeQueries'
 import { formatBRL } from '../../lib/money'
 import { invalidateAll } from '../../lib/queries'
-import { messageOf, rpc } from '../../lib/rpc'
+import { HAS_PAYMENTS_PACKAGE_HINT, packageChipLabel, packageUsedMessage, packageUseText, previewSession } from '../../lib/packageUse'
+import { messageOf, RpcError, rpc } from '../../lib/rpc'
 
 export interface PayTarget {
   /** 'complete' completes the appointment and receives in one transaction; 'pay' receives on an existing entry. */
   mode: 'pay' | 'complete'
   /** Pay mode: the ledger entry. */
   entryId?: string
-  /** Complete mode: the appointment. */
+  /** The appointment: Complete mode needs it; in pay mode it only enables the package chip. */
   appointmentId?: string
+  /** The appointment's start (ISO), to preview the package session number. */
+  startsAt?: string
   /** Complete mode: the appointment's São Paulo day, for Término real. */
   day?: string
   title: string
@@ -79,6 +83,16 @@ export function PaymentPanel({
   const methods = balance > 0 ? [...baseMethods, { value: CREDIT_METHOD.value, label: `${CREDIT_METHOD.label} (${formatBRL(balance)})` }] : baseMethods
   const packageSession = complete && gross === 0
 
+  // Package at payment (owner only; income of an appointment that still costs something).
+  const eligible = useEligiblePackages(target.appointmentId, !expense && !packageSession && gross > 0)
+  const packages = eligible.data ?? []
+  const [usePkg, setUsePkg] = useState(false)
+  const [pkgChoice, setPkgChoice] = useState<string | null>(null)
+  const chosen = packages.find((p) => p.client_package_id === pkgChoice) ?? packages[0] ?? null // the list comes ordered by expiry
+  const preview = usePackagePreview(usePkg ? chosen?.client_package_id : null)
+  const slot = chosen && preview.data ? previewSession(preview.data.total, chosen.remaining, preview.data.starts, target.startsAt) : null
+  const pkgMode = usePkg && !!chosen
+
   function setLine(i: number, patch: Partial<PayLine>) {
     setLines((cur) => {
       const start = cur.length === 1 && cur[0]!.cents === null ? effective : cur
@@ -107,6 +121,23 @@ export function PaymentPanel({
     }
     setPending(true)
     try {
+      if (pkgMode) {
+        // Package session: price 0, no discount, no payments. Complete mode applies the package and completes in ONE transaction.
+        const used = complete
+          ? await rpc.completeAndPay({
+              p_appointment_id: target.appointmentId!,
+              p_actual_end: iso,
+              p_discount_cents: null,
+              p_payments: [],
+              p_request_id: requestId.current,
+              p_client_package_id: chosen!.client_package_id,
+            })
+          : await rpc.applyPackageToAppointment({ p_appointment_id: target.appointmentId!, p_client_package_id: chosen!.client_package_id })
+        snack.show(used.session_number && used.sessions_total ? packageUsedMessage({ session_number: used.session_number, sessions_total: used.sessions_total }) : 'Sessão do pacote usada')
+        invalidateAll(qc)
+        onDone({ actualEnd: iso })
+        return
+      }
       if (complete) {
         await rpc.completeAndPay({
           p_appointment_id: target.appointmentId!,
@@ -129,11 +160,18 @@ export function PaymentPanel({
       invalidateAll(qc)
       onDone({ actualEnd: iso })
     } catch (e) {
-      snack.show(messageOf(e), 'error')
+      const hint = pkgMode && e instanceof RpcError && e.code === 'HAS_PAYMENTS' ? `. ${HAS_PAYMENTS_PACKAGE_HINT}` : ''
+      snack.show(`${messageOf(e)}${hint}`, 'error')
     } finally {
       setPending(false)
     }
   }
+
+  const pkgChip = chosen ? (
+    <Chip key="pkg" selected={pkgMode} onClick={() => setUsePkg(true)}>
+      {packageChipLabel(chosen.remaining)}
+    </Chip>
+  ) : null
 
   return (
     <div className="space-y-5">
@@ -155,7 +193,7 @@ export function PaymentPanel({
         )}
       </div>
 
-      {!expense && gross > 0 && (
+      {!expense && gross > 0 && !pkgMode && (
         <div>
           <FieldLabel htmlFor="pay-discount">Desconto (R$)</FieldLabel>
           <MoneyInput id="pay-discount" value={discount} onChange={setDiscount} />
@@ -167,7 +205,48 @@ export function PaymentPanel({
         </div>
       )}
 
-      {!packageSession && (
+      {pkgMode && chosen && (
+        <div className="space-y-3">
+          <ChipRow>
+            {pkgChip}
+            {methods.map((x) => (
+              <Chip
+                key={x.value}
+                onClick={() => {
+                  setUsePkg(false)
+                  setLine(0, { method: x.value as PayMethod })
+                }}
+              >
+                {x.label}
+              </Chip>
+            ))}
+          </ChipRow>
+          {packages.length > 1 && (
+            <div>
+              <FieldLabel htmlFor="pay-package">Pacote</FieldLabel>
+              <select
+                id="pay-package"
+                value={chosen.client_package_id}
+                onChange={(e) => setPkgChoice(e.target.value)}
+                className="hit w-full rounded-[var(--radius-input)] border border-line bg-surface px-3"
+              >
+                {packages.map((p) => (
+                  <option key={p.client_package_id} value={p.client_package_id}>
+                    {`${p.template_name} · ${p.remaining} restantes · vence ${formatDate(p.expires_at)}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div className="rounded-[var(--radius-input)] border border-border-gold bg-surface-2 px-4 py-3">
+            <p className="title-serif text-lg" aria-live="polite">
+              {packageUseText(slot)}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {!packageSession && !pkgMode && (
         <>
           <div className="rounded-[var(--radius-input)] border border-border-gold bg-surface-2 px-4 py-3">
             <Kicker>{expense ? 'Total a pagar' : 'Total a receber'}</Kicker>
@@ -191,6 +270,7 @@ export function PaymentPanel({
                   )}
                 </div>
                 <ChipRow>
+                  {i === 0 && pkgChip}
                   {methods.map((x) => (
                     <Chip key={x.value} selected={l.method === x.value} onClick={() => setLine(i, { method: x.value as PayMethod })}>
                       {x.label}
@@ -222,7 +302,11 @@ export function PaymentPanel({
       )}
 
       <div className="flex flex-wrap gap-2">
-        {packageSession ? (
+        {pkgMode ? (
+          <Button loading={pending} onClick={() => void submit(true)}>
+            {complete ? 'Concluir e usar pacote' : 'Usar pacote'}
+          </Button>
+        ) : packageSession ? (
           <Button loading={pending} onClick={() => void submit(false)}>
             Concluir
           </Button>

@@ -167,6 +167,8 @@ export function invalidateAll(qc: QueryClient) {
     'client-appts',
     'packages',
     'package-sessions',
+    'package-appointments',
+    'eligible-packages',
     'package-templates',
     'needs-return',
     'finance-summary',

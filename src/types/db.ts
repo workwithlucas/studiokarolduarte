@@ -1057,10 +1057,12 @@ export type Database = {
           id: string
           known_client_ids: string[]
           last_inbound_at: string | null
+          last_options: Json | null
           last_outbound_at: string | null
           lease_until: string | null
           mode: string
           needs_attention: boolean
+          options_at: string | null
           pending_action: Json | null
           pending_since: string | null
           phone_e164: string
@@ -1078,10 +1080,12 @@ export type Database = {
           id?: string
           known_client_ids?: string[]
           last_inbound_at?: string | null
+          last_options?: Json | null
           last_outbound_at?: string | null
           lease_until?: string | null
           mode?: string
           needs_attention?: boolean
+          options_at?: string | null
           pending_action?: Json | null
           pending_since?: string | null
           phone_e164: string
@@ -1099,10 +1103,12 @@ export type Database = {
           id?: string
           known_client_ids?: string[]
           last_inbound_at?: string | null
+          last_options?: Json | null
           last_outbound_at?: string | null
           lease_until?: string | null
           mode?: string
           needs_attention?: boolean
+          options_at?: string | null
           pending_action?: Json | null
           pending_since?: string | null
           phone_e164?: string
@@ -1157,6 +1163,7 @@ export type Database = {
           from_human: boolean
           id: string
           kind: string
+          meta: Json | null
           pause_prev_mode: string | null
           pause_prev_until: string | null
           pause_set_until: string | null
@@ -1175,6 +1182,7 @@ export type Database = {
           from_human?: boolean
           id?: string
           kind: string
+          meta?: Json | null
           pause_prev_mode?: string | null
           pause_prev_until?: string | null
           pause_set_until?: string | null
@@ -1193,6 +1201,7 @@ export type Database = {
           from_human?: boolean
           id?: string
           kind?: string
+          meta?: Json | null
           pause_prev_mode?: string | null
           pause_prev_until?: string | null
           pause_set_until?: string | null
@@ -1548,6 +1557,8 @@ export type Database = {
         Returns: string
       }
       _client_credit_balance: { Args: { p_client_id: string }; Returns: number }
+      _appt_has_live_payments: { Args: { p_appointment_id: string }; Returns: boolean }
+      _confirmations_eligible: { Args: never; Returns: boolean }
       _cron_call: { Args: { p_function: string }; Returns: undefined }
       _cron_send_confirmations: { Args: never; Returns: undefined }
       _cron_wa_sweep: { Args: never; Returns: undefined }
@@ -1565,6 +1576,10 @@ export type Database = {
       _name_fold: { Args: { p: string }; Returns: string }
       _name_key: { Args: { p: string }; Returns: string }
       _name_similarity: { Args: { a: string; b: string }; Returns: number }
+      _package_state: {
+        Args: { p_appointment_id: string; p_client_package_id: string }
+        Returns: Json
+      }
       _payment_lines: {
         Args: { p_payments: Json }
         Returns: {
@@ -1818,6 +1833,10 @@ export type Database = {
       }
       rpc_agent_set_mode: { Args: { p_mode: string }; Returns: Json }
       rpc_agent_set_settings: { Args: { p_patch: Json }; Returns: undefined }
+      rpc_apply_package_to_appointment: {
+        Args: { p_appointment_id: string; p_client_package_id?: string }
+        Returns: Json
+      }
       rpc_book_appointment: {
         Args: {
           p_action: Database["public"]["Enums"]["service_action"]
@@ -1857,6 +1876,7 @@ export type Database = {
         Args: {
           p_actual_end?: string
           p_appointment_id: string
+          p_client_package_id?: string
           p_discount_cents?: number
           p_payments?: Json
           p_request_id?: string
@@ -1897,6 +1917,15 @@ export type Database = {
         Returns: string
       }
       rpc_delete_block: { Args: { p_block_id: string }; Returns: undefined }
+      rpc_eligible_packages: {
+        Args: { p_appointment_id: string }
+        Returns: {
+          client_package_id: string
+          expires_at: string
+          remaining: number
+          template_name: string
+        }[]
+      }
       rpc_edit_appointment: {
         Args: {
           p_addon_ids?: string[]
@@ -1961,6 +1990,8 @@ export type Database = {
           paid_cents: number
           payment_cents: number
           payment_id: string
+          pkg_client_package_id: string
+          pkg_remaining: number
           professional_id: string
           professional_name: string
           reversed_at: string
@@ -2045,6 +2076,10 @@ export type Database = {
           p_request_id?: string
         }
         Returns: Json
+      }
+      rpc_remove_package_from_appointment: {
+        Args: { p_appointment_id: string }
+        Returns: undefined
       }
       rpc_reschedule_appointment: {
         Args: {

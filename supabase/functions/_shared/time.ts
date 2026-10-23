@@ -125,3 +125,25 @@ export function hhmm(ms: number): string {
   const p = spParts(ms)
   return `${String(p.hh).padStart(2, '0')}:${String(p.mm).padStart(2, '0')}`
 }
+
+const SHORT_WEEKDAYS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado']
+
+/**
+ * The only way a time reaches the client or the model, computed in code (America/Sao_Paulo):
+ * "hoje (terça, 20/10) às 17:00", "amanhã (quarta, 21/10) às 17:00", "depois de amanhã (quinta, 22/10) às 17:00",
+ * otherwise "sexta (23/10) às 17:00". `nowMs` is the current instant; the day is decided in São Paulo.
+ */
+export function slotLabel(startsAt: number | string, nowMs: number): string {
+  const ms = typeof startsAt === 'number' ? startsAt : parseInstant(startsAt)
+  if (ms === null || !Number.isFinite(ms)) return ''
+  const p = spParts(ms)
+  const today = spParts(nowMs).ymd
+  const wd = SHORT_WEEKDAYS[p.weekday] ?? ''
+  const short = `${wd}, ${ddmm(p.ymd)}`
+  const day =
+    p.ymd === today ? `hoje (${short})`
+    : p.ymd === addDays(today, 1) ? `amanhã (${short})`
+    : p.ymd === addDays(today, 2) ? `depois de amanhã (${short})`
+    : `${wd} (${ddmm(p.ymd)})`
+  return `${day} às ${hhmm(ms)}`
+}

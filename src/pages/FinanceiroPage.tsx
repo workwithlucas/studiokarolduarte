@@ -48,6 +48,7 @@ import {
 import { useFinanceList, useFinanceSummary, type FinanceRow } from '../lib/financeQueries'
 import { toTitlePt } from '../lib/format'
 import { formatBRL } from '../lib/money'
+import { packagePillLabel } from '../lib/packageUse'
 import { invalidateAll, useProfessionals } from '../lib/queries'
 import { messageOf, rpc } from '../lib/rpc'
 
@@ -318,6 +319,7 @@ function payTargetOf(r: FinanceRow): PayTarget {
     return {
       mode: 'complete',
       appointmentId: r.appointment_id,
+      startsAt: r.appointment_starts_at,
       clientId: r.client_id,
       day: ymdOf(r.appointment_starts_at),
       title: who,
@@ -330,6 +332,7 @@ function payTargetOf(r: FinanceRow): PayTarget {
   return {
     mode: 'pay',
     entryId: r.entry_id,
+    ...(r.appointment_id && !expense ? { appointmentId: r.appointment_id, startsAt: r.appointment_starts_at } : {}),
     clientId: r.client_id,
     title: who,
     detail: `${detail} · vence ${formatDate(r.due_date)}`,
@@ -470,7 +473,10 @@ function Receivables({
                         </p>
                       </div>
                       <div className="flex shrink-0 flex-col items-end gap-1">
-                        <Pill tone={pill.tone}>{pill.label}</Pill>
+                        <div className="flex flex-wrap justify-end gap-1">
+                          {r.pkg_remaining > 0 && <Pill tone="gold">{packagePillLabel(r.pkg_remaining)}</Pill>}
+                          <Pill tone={pill.tone}>{pill.label}</Pill>
+                        </div>
                         <p className="title-serif text-lg">{formatBRL(r.open_cents)}</p>
                       </div>
                       <MoreButton onClick={() => actions.open(r, 'Cancelar lançamento')} />
