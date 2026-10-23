@@ -41,7 +41,7 @@ update professionals set user_id = '00000000-0000-0000-0000-00000000f002' where 
 
 select pg_temp.sv('pk', rpc_sell_package(pg_temp.u('c1'), pg_temp.u('tpl')));
 select pg_temp.sv('pk2', rpc_sell_package(pg_temp.u('c1'), pg_temp.u('tpl')));
-update client_packages set expires_at = today_sp() + 10 where id = pg_temp.u('pk2');  -- expires first
+update client_packages set expires_at = today_sp() + 25 where id = pg_temp.u('pk2');  -- expires first, still valid for every appointment up to 3 weeks out
 select pg_temp.sv('pkc2', rpc_sell_package(pg_temp.u('c2'), pg_temp.u('tpl')));
 select pg_temp.sv('pku', rpc_sell_package(pg_temp.u('c1'), pg_temp.u('tplu')));
 
@@ -153,9 +153,9 @@ select is_empty($$select * from check_invariants()$$, 'invariants after complete
 -- ------------------------------------------------------------ rpc_finance_list: pkg fields on open income of non-package appointments
 select pg_temp.sv('a9', pg_temp.book('c1', 'mara', 'sbr', 6, '10:00'));
 select is((select pkg_client_package_id from rpc_finance_list('receivable', today_sp(), today_sp() + 90, null, null, pg_temp.u('c1'))
-           where appointment_id = pg_temp.u('a9')), pg_temp.u('pk'), 'list: first eligible package (pk2 expires before a9)');
+           where appointment_id = pg_temp.u('a9')), pg_temp.u('pk2'), 'list: first eligible package (earliest expiry)');
 select is((select pkg_remaining from rpc_finance_list('receivable', today_sp(), today_sp() + 90, null, null, pg_temp.u('c1'))
-           where appointment_id = pg_temp.u('a9')), 1, 'list: pkg_remaining');
+           where appointment_id = pg_temp.u('a9')), 3, 'list: pkg_remaining');
 select is((select count(*) from rpc_finance_list('receivable', today_sp(), today_sp() + 90, null, null, pg_temp.u('c3'))
            where pkg_client_package_id is not null), 0::bigint, 'list: client without package has no pkg fields');
 select is((select pkg_client_package_id from rpc_finance_list('receivable', today_sp(), today_sp() + 90, null, null, pg_temp.u('c2'))
