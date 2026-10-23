@@ -4,11 +4,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PendingView } from '../../lib/assistantQueries'
 
-const mocks = vi.hoisted(() => ({ invoke: vi.fn(), load: vi.fn() }))
+const mocks = vi.hoisted(() => ({ invoke: vi.fn(), load: vi.fn(), threads: vi.fn(), thread: vi.fn(), actions: vi.fn(), undoLogged: vi.fn() }))
 
 vi.mock('../../lib/assistantQueries', async (orig) => {
   const real = await orig<typeof import('../../lib/assistantQueries')>()
-  return { ...real, invokeAssistant: mocks.invoke, loadThread: mocks.load }
+  return { ...real, invokeAssistant: mocks.invoke, loadThread: mocks.load, listThreads: mocks.threads, getThread: mocks.thread, listActions: mocks.actions, undoLogged: mocks.undoLogged }
 })
 
 import { ASSISTANT_INVALIDATE_KEYS, invalidateAfterWrite } from '../../lib/assistantQueries'
@@ -20,6 +20,7 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = () => {}
   mocks.invoke.mockReset()
   mocks.load.mockReset()
+  for (const m of [mocks.threads, mocks.thread, mocks.actions, mocks.undoLogged]) m.mockReset()
 })
 afterEach(cleanup)
 
@@ -27,6 +28,15 @@ const pending = (status: PendingView['status'], undoable: number[] = []): Pendin
 const proposal = {
   kind: 'proposal' as const, pending_id: 'p1', expires_at: '2999-01-01T00:00:00Z',
   actions: [{ title: 'Lançar despesa', lines: [{ label: 'Valor', value: 'R$ 20,00' }], warnings: ['Valor alto, confira'] }],
+}
+
+function mount() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={qc}>
+      <AssistantSheet open onClose={() => {}} />
+    </QueryClientProvider>,
+  )
 }
 
 describe('invalidation after a confirmed action or an undo', () => {
@@ -107,14 +117,6 @@ describe('ChoiceChips', () => {
 })
 
 describe('AssistantSheet', () => {
-  function mount() {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    return render(
-      <QueryClientProvider client={qc}>
-        <AssistantSheet open onClose={() => {}} />
-      </QueryClientProvider>,
-    )
-  }
   it('empty state has the three starter chips; a chip sends one message with a request id', async () => {
     mocks.load.mockResolvedValue({ messages: [], pendings: [] })
     mocks.invoke.mockResolvedValue({ messages: [{ id: 'm1', role: 'user', body: 'Resumo de hoje', card: null, created_at: '2026-10-23T12:00:00Z' }], pendings: [] })
@@ -148,5 +150,84 @@ describe('AssistantSheet', () => {
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledTimes(1))
     expect(mocks.invoke.mock.calls[0]![0]).toMatchObject({ action: 'confirm', pending_id: 'p1' })
     expect(await screen.findByText('Confirmado')).toBeTruthy()
+  })
+})
+
+describe('archived conversation (read-only)', () => {
+  const result = { kind: 'result' as const, pending_id: 'p1', lines: [{ index: 0, ok: true, text: 'despesa lançada' }] }
+  it('proposal card has no Confirmar or Cancelar, even if the proposal is still pending', () => {
+    render(<ProposalCard card={proposal} pending={pending('pending')} busy={false} readOnly onConfirm={() => {}} onCancel={() => {}} />)
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.getByText('Arquivada')).toBeTruthy()
+  })
+  it('result card shows no Desfazer', () => {
+    render(<ResultCard card={result} pending={pending('confirmed', [0])} busy={false} readOnly onUndo={() => {}} />)
+    expect(screen.queryByRole('button', { name: 'Desfazer' })).toBeNull()
+  })
+  it('the Histórico tab lists archived threads, opens one read-only and goes back', async () => {
+    mocks.load.mockResolvedValue({ messages: [], pendings: [] })
+    mocks.threads.mockResolvedValue([{ thread_id: 't1', title: 'Lançar despesa de gás', started_at: '2026-10-22T15:00:00Z', archived_at: '2026-10-22T16:00:00Z', message_count: 3 }])
+    mocks.thread.mockResolvedValue({
+      messages: [
+        { id: 'u1', role: 'user', body: 'Lançar despesa de gás', card: null, created_at: '2026-10-22T15:00:00Z' },
+        { id: 'c1', role: 'card', body: null, card: proposal, created_at: '2026-10-22T15:01:00Z' },
+      ],
+      pendings: [{ ...pending('cancelled') }],
+    })
+    mount()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Histórico' }))
+    fireEvent.click(await screen.findByText(/3 mensagens/))
+    expect(await screen.findByText('R$ 20,00')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Confirmar' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Cancelar' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Voltar/ }))
+    expect(await screen.findByText(/3 mensagens/)).toBeTruthy()
+  })
+  it('empty states of Histórico and Ações', async () => {
+    mocks.load.mockResolvedValue({ messages: [], pendings: [] })
+    mocks.threads.mockResolvedValue([])
+    mocks.actions.mockResolvedValue({ actions: [], has_more: false })
+    mount()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Histórico' }))
+    expect(await screen.findByText('Nenhuma conversa arquivada.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: 'Ações' }))
+    expect(await screen.findByText('Nenhuma ação executada.')).toBeTruthy()
+  })
+  it('Nova conversa asks first, then archives and shows the empty state', async () => {
+    mocks.load.mockResolvedValue({
+      messages: [{ id: 'u1', role: 'user', body: 'oi', card: null, created_at: '2026-10-23T12:00:00Z' }], pendings: [],
+    })
+    mocks.invoke.mockResolvedValue({ messages: [], pendings: [] })
+    mount()
+    await screen.findByText('oi')
+    fireEvent.click(screen.getByRole('button', { name: 'Nova conversa' }))
+    expect(screen.getByText('A conversa atual vai para o Histórico.')).toBeTruthy()
+    expect(mocks.invoke).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith({ action: 'new_thread' }))
+    expect(await screen.findByText('Como posso ajudar?')).toBeTruthy()
+  })
+  it('Ações: Desfazer only on done rows with undo data; a blocked undo shows the RPC message', async () => {
+    mocks.load.mockResolvedValue({ messages: [], pendings: [] })
+    const base = { pending_id: 'p1', kind: 'create_entry', amount_cents: 2000, entry_id: null, client_name: null, error_code: null, undone_at: null, executed_at: '2026-10-23T15:30:00Z' }
+    mocks.actions.mockResolvedValue({
+      actions: [
+        { ...base, action_index: 0, summary: 'Despesa A', status: 'done', undoable: true },
+        { ...base, action_index: 1, summary: 'Despesa B', status: 'done', undoable: false },
+        { ...base, action_index: 2, summary: 'Despesa C', status: 'undone', undoable: false, undone_at: '2026-10-23T16:00:00Z' },
+        { ...base, action_index: 3, summary: 'Despesa D', status: 'failed', undoable: false, error_code: 'X' },
+      ],
+      has_more: false,
+    })
+    mocks.undoLogged.mockResolvedValue({ ok: false, message: 'O lançamento já tem pagamento.' })
+    mount()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Ações' }))
+    expect(await screen.findByText('Despesa A')).toBeTruthy()
+    for (const l of ['FEITO', 'DESFEITO', 'FALHOU']) expect(screen.getAllByText(l).length).toBeGreaterThan(0)
+    expect(screen.getAllByRole('button', { name: 'Desfazer' })).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Exportar CSV' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Desfazer' }))
+    expect(await screen.findByText('O lançamento já tem pagamento.')).toBeTruthy()
+    expect(mocks.undoLogged).toHaveBeenCalledWith('p1', 0)
   })
 })

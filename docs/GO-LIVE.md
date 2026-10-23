@@ -28,6 +28,7 @@ Regras deste roteiro:
 13c. Pacote no pagamento, confiabilidade da Thaís e ritmo das confirmações (Tarefa 10 desta rodada): backup, `supabase db push`, deploy de todas as funções do agente (passo 19h)
 13d. Confirmações independentes do modo da Thaís, Tarefa 14: `supabase db push` e deploy de `send-confirmations`, `wa-webhook`, `agent-run` e `wa-sweep` (passo 19i)
 13e. Assistente financeiro da dona, Tarefa 15: backup, `supabase db push` e deploy de `assistant-chat` (passo 19j)
+13f. Histórico do assistente, Tarefa 16: backup, `supabase db push` e deploy de `assistant-chat` (passo 19k)
 14. Agente em modo *Sombra*, depois *Teste* (passo 20)
 15. Agente em modo *No ar* (passo 21)
 
@@ -554,6 +555,28 @@ update studio_settings set value = 'false' where key = 'assistant_enabled';
 ```
 
 Para ligar de novo, use `'true'`.
+
+**19k. Histórico do assistente (Tarefa 16).** Depois do passo 19j. O chat da Karol ganha três abas: *Conversa*, *Histórico* e *Ações*, e o botão *Nova conversa*. Nova conversa guarda a atual no Histórico (só leitura; propostas ainda abertas dela são canceladas) e começa outra do zero: o assistente não lembra nada da anterior. A aba *Ações* é o registro permanente de tudo que o assistente executou (hora, resumo, valor, *FEITO*, *DESFEITO* ou *FALHOU*), com *Desfazer* enquanto for possível, *Exportar CSV* e *Carregar mais*. Traz uma migration nova (`20261015120000_assistant_history.sql`), aditiva: colunas `thread_id` e `archived_at` em `assistant_messages` (as conversas já existentes ficam juntas numa só conversa por dona) e `thread_id` em `assistant_pending`; a tabela `assistant_actions_log` (só a dona lê; só a função escreve), já preenchida com as propostas confirmadas até hoje; funções internas só para o servidor (`rpc_assistant_record_execution`, `rpc_assistant_mark_undone`, `rpc_assistant_new_thread`, `rpc_assistant_list_threads`); a verificação **I27** em `check_invariants()`. A limpeza diária (`assistant-purge-old`) passa de 30 para **90 dias** para mensagens e propostas; o registro de ações nunca é apagado. Nenhum nome ou código de erro existente muda. Faça nesta ordem:
+
+1. **Backup** (passo 23) e depois **aplique a migration:**
+
+```powershell
+supabase db push
+```
+
+2. **Publique a função** (mesma forma do passo 19j; nenhum segredo novo):
+
+```powershell
+supabase functions deploy assistant-chat --no-verify-jwt
+```
+
+3. **Publique o app** (passos 14 e 15). Publique a função e o app juntos: o app antigo continua funcionando com a função nova, mas as abas só aparecem com o app novo.
+4. **Conferir.** Entre como a Karol, abra o assistente e mande uma mensagem. Toque em *Nova conversa* e confirme: a tela volta vazia. Em *Histórico* a conversa aparece e abre só para leitura (sem *Confirmar* nem *Cancelar*). Faça e confirme uma despesa pequena de teste: em *Ações* ela aparece como *FEITO*; toque em *Desfazer* e ela vira *DESFEITO*. Como profissional, o assistente continua sem aparecer.
+5. **Conferir o banco** (SQL Editor): deve voltar zero linhas.
+
+```sql
+select * from check_invariants();
+```
 
 **20. Modo Teste com o seu telefone.** No app, *Agente*: em *Teste* adicione o seu número (com DDD) e escolha *Teste*. Mande mensagens do seu celular e confira:
 

@@ -3,10 +3,11 @@
 import { callMessages, textOf, type ChatMessage, type TextBlock, type ToolResultBlock } from './anthropic.ts'
 import { executeAll, runUndo } from './assistant-exec.ts'
 import { ASSISTANT_PERSONA } from './assistant-prompt.ts'
-import { lostClaim, pendingViewOf } from './assistant-state.ts'
+import { inArchivedThread, lostClaim, pageSize, pendingViewOf, threadTitle } from './assistant-state.ts'
 import { TOOL_DEFS, executeTool, newRun, type ToolCtx, type ToolRun } from './assistant-tools.ts'
 import type {
-  AssistantResponse, Card, ChoiceCard, MessageView, PendingActionItem, PendingView, ProposalCard, UndoItem,
+  ActionLogItem, ActionsResponse, AssistantResponse, Card, ChoiceCard, MessageView, PendingActionItem, PendingView, ProposalCard,
+  ThreadsResponse, UndoItem, UndoLoggedResponse,
 } from './assistant-types.ts'
 import { GUARD_FALLBACK, GUARD_NOTE, validatePick, violatesTextGuard } from './assistant-validate.ts'
 import { callRpc, unwrap } from './db.ts'
@@ -36,7 +37,7 @@ export interface AssistantRuntime {
 
 export interface AssistantReply {
   status: number
-  body: AssistantResponse | { error: string }
+  body: AssistantResponse | ThreadsResponse | ActionsResponse | UndoLoggedResponse | { error: string }
 }
 
 interface Row {
@@ -48,11 +49,14 @@ interface Row {
   created_at: string
 }
 const COLS = 'id,role,body,card,meta,created_at'
+const ACTIONS = ['message', 'confirm', 'cancel', 'undo', 'new_thread', 'list_threads', 'get_thread', 'list_actions', 'undo_logged']
 const err = (status: number, error: string): AssistantReply => ({ status, body: { error } })
 
 interface Turn {
   rt: AssistantRuntime
   uid: string
+  /** The owner's current (not archived) conversation; every message of this turn is written to it. */
+  threadId: string
   userDb: Db
   requestId: string
   out: Row[]
@@ -64,7 +68,7 @@ async function add(t: Turn, role: Row['role'], body: string | null, card: Card |
   const extra = role !== 'user' && t.firstMeta ? t.firstMeta : {}
   if (role !== 'user') t.firstMeta = null
   const row = unwrap<Row>(
-    await t.rt.svc.from('assistant_messages').insert({ owner_user_id: t.uid, role, body, card, meta: { request_id: t.requestId, ...extra, ...meta } }).select(COLS).single(),
+    await t.rt.svc.from('assistant_messages').insert({ owner_user_id: t.uid, thread_id: t.threadId, role, body, card, meta: { request_id: t.requestId, ...extra, ...meta } }).select(COLS).single(),
   )
   t.out.push(row)
   return row
@@ -76,6 +80,7 @@ const viewOf = (r: Row): MessageView => ({ id: r.id, role: r.role, body: r.body,
 interface PendingRow {
   id: string
   owner_user_id: string
+  thread_id: string | null
   actions: PendingActionItem[]
   status: PendingView['status']
   expires_at: string
@@ -123,20 +128,33 @@ export async function handleAssistant(rt: AssistantRuntime, jwt: string | null, 
   const body = raw as Record<string, unknown> | null
   if (!body || typeof body !== 'object') return err(400, 'Requisição inválida.')
   const action = body.action
-  if (action !== 'message' && action !== 'confirm' && action !== 'cancel' && action !== 'undo') return err(400, 'Ação inválida.')
+  if (typeof action !== 'string' || !ACTIONS.includes(action)) return err(400, 'Ação inválida.')
   if (action === 'message') {
     if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 1000) return err(400, 'Escreva uma mensagem de até 1000 caracteres.')
     const pk = body.pick
     if (pk !== undefined && (typeof pk !== 'object' || pk === null || typeof (pk as any).choice_id !== 'string' || typeof (pk as any).value !== 'string')) return err(400, 'Escolha inválida.')
-  } else {
+  } else if (action === 'get_thread') {
+    if (!isUuid(body.thread_id)) return err(400, 'Conversa inválida.')
+  } else if (action === 'confirm' || action === 'cancel' || action === 'undo' || action === 'undo_logged') {
     if (!isUuid(body.pending_id)) return err(400, 'Proposta inválida.')
-    if (action === 'undo' && body.action_index !== undefined && !(Number.isInteger(body.action_index) && (body.action_index as number) >= 0 && (body.action_index as number) < 10)) return err(400, 'Ação inválida.')
+    const okIndex = Number.isInteger(body.action_index) && (body.action_index as number) >= 0 && (body.action_index as number) < 10
+    if (action === 'undo' && body.action_index !== undefined && !okIndex) return err(400, 'Ação inválida.')
+    if (action === 'undo_logged' && !okIndex) return err(400, 'Ação inválida.')
+  }
+  if (action === 'list_threads') return { status: 200, body: await listThreads(rt, user.id, pageSize(body.limit, 30, 100)) }
+  if (action === 'get_thread') return await getThread(rt, user.id, (body.thread_id as string).toLowerCase())
+  if (action === 'list_actions') {
+    const offset = Number.isInteger(body.offset) && (body.offset as number) > 0 ? (body.offset as number) : 0
+    return { status: 200, body: await listActions(rt, user.id, pageSize(body.limit, 50, 200), offset) }
   }
   const requestId = isUuid(body.request_id) ? (body.request_id as string).toLowerCase() : rt.uuid()
-  const t: Turn = { rt, uid: user.id, userDb, requestId, out: [], touched: new Set(), firstMeta: null }
+  const current = await currentThread(rt, user.id)
+  const t: Turn = { rt, uid: user.id, threadId: current ?? rt.uuid(), userDb, requestId, out: [], touched: new Set(), firstMeta: null }
 
   // Same request id again (double tap, retry): return what the first one produced, run nothing.
-  const prior = unwrap<Row[]>(await rt.svc.from('assistant_messages').select(COLS).eq('owner_user_id', user.id).eq('meta->>request_id', requestId).order('created_at', { ascending: true }))
+  const prior = action === 'new_thread' || action === 'undo_logged'
+    ? []
+    : unwrap<Row[]>(await rt.svc.from('assistant_messages').select(COLS).eq('owner_user_id', user.id).eq('meta->>request_id', requestId).order('created_at', { ascending: true }))
   if (prior?.length) {
     t.out = prior
     for (const r of prior) if (r.card && 'pending_id' in r.card) t.touched.add((r.card as ProposalCard).pending_id)
@@ -147,6 +165,12 @@ export async function handleAssistant(rt: AssistantRuntime, jwt: string | null, 
   const limited = await rt.svc.from('assistant_messages').select('id', { count: 'exact', head: true }).eq('owner_user_id', user.id).eq('role', 'user').gte('created_at', since)
   if (limited.error) throw new Error(limited.error.message)
   if ((limited.count ?? 0) >= RATE_LIMIT) return err(429, 'Muitas mensagens em pouco tempo. Aguarde alguns minutos e tente de novo.')
+
+  if (action === 'new_thread') {
+    if (current) await callRpc(rt.svc, 'rpc_assistant_new_thread', { p_owner: user.id, p_thread: current })
+    return { status: 200, body: { messages: [], pendings: [] } }
+  }
+  if (action === 'undo_logged') return { status: 200, body: await onUndoLogged(t, body.pending_id as string, body.action_index as number) }
 
   try {
     if (action === 'message') await onMessage(t, (body.text as string).trim(), body.pick as { choice_id: string; value: string } | undefined)
@@ -163,7 +187,7 @@ export async function handleAssistant(rt: AssistantRuntime, jwt: string | null, 
 // ---------------------------------------------------------------- message turn
 async function loadKnown(t: Turn): Promise<Set<string>> {
   const rows = unwrap<Array<{ meta: { known_ids?: string[] } | null }>>(
-    await t.rt.svc.from('assistant_messages').select('meta').eq('owner_user_id', t.uid).in('role', ['assistant', 'card']).order('created_at', { ascending: false }).limit(HISTORY),
+    await t.rt.svc.from('assistant_messages').select('meta').eq('owner_user_id', t.uid).eq('thread_id', t.threadId).in('role', ['assistant', 'card']).order('created_at', { ascending: false }).limit(HISTORY),
   )
   const known = new Set<string>()
   for (const r of rows ?? []) for (const id of r.meta?.known_ids ?? []) if (isUuid(id)) known.add(id)
@@ -178,7 +202,7 @@ async function onMessage(t: Turn, text: string, pick?: { choice_id: string; valu
 }
 
 async function onPick(t: Turn, text: string, pick: { choice_id: string; value: string }): Promise<void> {
-  const rows = unwrap<Row[]>(await t.rt.svc.from('assistant_messages').select(COLS).eq('owner_user_id', t.uid).eq('role', 'card').order('created_at', { ascending: false }).limit(10))
+  const rows = unwrap<Row[]>(await t.rt.svc.from('assistant_messages').select(COLS).eq('owner_user_id', t.uid).eq('thread_id', t.threadId).eq('role', 'card').order('created_at', { ascending: false }).limit(10))
   const row = (rows ?? []).find((r) => r.card?.kind === 'choice' && (r.card as ChoiceCard).choice_id === pick.choice_id)
   const card = row?.card?.kind === 'choice' ? (row.card as ChoiceCard) : null
   const latestChoice = (rows ?? []).find((r) => r.card?.kind === 'choice')
@@ -213,7 +237,7 @@ const SPOKEN = (nowMs: number) => {
 
 async function history(t: Turn): Promise<ChatMessage[]> {
   const rows = unwrap<Row[]>(
-    await t.rt.svc.from('assistant_messages').select(COLS).eq('owner_user_id', t.uid).in('role', ['user', 'assistant']).not('body', 'is', null).order('created_at', { ascending: false }).limit(HISTORY),
+    await t.rt.svc.from('assistant_messages').select(COLS).eq('owner_user_id', t.uid).eq('thread_id', t.threadId).in('role', ['user', 'assistant']).not('body', 'is', null).order('created_at', { ascending: false }).limit(HISTORY),
   )
   const msgs: ChatMessage[] = []
   for (const r of (rows ?? []).slice().reverse()) {
@@ -312,6 +336,7 @@ async function finish(t: Turn, run: ToolRun, text: string, guard: string, usage:
     const p = unwrap<PendingRow>(
       await t.rt.svc.from('assistant_pending').insert({
         owner_user_id: t.uid,
+        thread_id: t.threadId,
         actions,
       }).select('*').single(),
     )
@@ -325,11 +350,14 @@ async function finish(t: Turn, run: ToolRun, text: string, guard: string, usage:
 }
 
 // ---------------------------------------------------------------- confirm / cancel / undo
+const ARCHIVED_PROPOSAL = 'Esta proposta é de uma conversa arquivada.'
 const hiddenMarker = (t: Turn, kind: string) => add(t, 'user', null, null, { hidden: true, kind })
 
 async function onConfirm(t: Turn, pendingId: string): Promise<void> {
   await hiddenMarker(t, 'confirm')
   t.touched.add(pendingId)
+  const pre = await loadPending(t, pendingId)
+  if (pre && inArchivedThread(pre, t.threadId)) return void (await add(t, 'assistant', ARCHIVED_PROPOSAL, null, { code_built: true }))
   const now = isoOf(t.rt.now())
   // One atomic UPDATE decides who executes: pending -> confirmed only while it has not expired.
   const claimed = unwrap<PendingRow[]>(
@@ -351,9 +379,11 @@ async function onConfirm(t: Turn, pendingId: string): Promise<void> {
   }
   const row = claimed[0]!
   const summary = await executeAll(t.userDb, row.id, row.actions)
-  unwrap(
-    await t.rt.svc.from('assistant_pending').update({ status: summary.status, executed_at: isoOf(t.rt.now()), result: { lines: summary.lines }, undo: summary.undo }).eq('id', row.id),
-  )
+  // Pending status and log rows in one transaction; the UNIQUE (pending_id, action_index) makes a repeat harmless.
+  await callRpc(t.rt.svc, 'rpc_assistant_record_execution', {
+      p_owner: t.uid, p_pending_id: row.id, p_status: summary.status, p_executed_at: isoOf(t.rt.now()),
+      p_result: { lines: summary.lines }, p_undo: summary.undo, p_log: summary.log,
+  })
   await add(t, 'assistant', summary.reply, null, { code_built: true })
   await add(t, 'card', null, { kind: 'result', pending_id: row.id, lines: summary.lines })
 }
@@ -361,6 +391,8 @@ async function onConfirm(t: Turn, pendingId: string): Promise<void> {
 async function onCancel(t: Turn, pendingId: string): Promise<void> {
   await hiddenMarker(t, 'cancel')
   t.touched.add(pendingId)
+  const pre = await loadPending(t, pendingId)
+  if (pre && inArchivedThread(pre, t.threadId)) return void (await add(t, 'assistant', ARCHIVED_PROPOSAL, null, { code_built: true }))
   const claimed = unwrap<PendingRow[]>(
     await t.rt.svc.from('assistant_pending').update({ status: 'cancelled' }).eq('id', pendingId).eq('owner_user_id', t.uid).eq('status', 'pending').select('*'),
   )
@@ -379,6 +411,7 @@ async function onUndo(t: Turn, pendingId: string, index?: number): Promise<void>
   if (!items.length) return void (await add(t, 'assistant', 'Não há nada para desfazer aqui.'))
   const undo = [...(p.undo ?? [])]
   const done: string[] = []
+  const doneIdx: number[] = []
   let blocked: string | null = null
   for (const item of items.slice().reverse()) {
     const r = await runUndo(t.userDb, item)
@@ -387,12 +420,84 @@ async function onUndo(t: Turn, pendingId: string, index?: number): Promise<void>
       break
     }
     done.push(item.label)
+    doneIdx.push(item.index)
     undo[undo.findIndex((u) => u.index === item.index)] = { ...item, done: true }
   }
-  if (done.length) unwrap(await t.rt.svc.from('assistant_pending').update({ undo }).eq('id', p.id))
+  if (done.length) await callRpc(t.rt.svc, 'rpc_assistant_mark_undone', { p_owner: t.uid, p_pending_id: p.id, p_undo: undo, p_indexes: doneIdx })
   await add(
     t, 'assistant',
     [done.length ? `Desfeito: ${done.join('; ')}.` : '', blocked ? `Não deu para desfazer: ${blocked}` : ''].filter(Boolean).join(' '),
     null, { code_built: true },
   )
+}
+
+// ---------------------------------------------------------------- history: threads and the actions log
+async function currentThread(rt: AssistantRuntime, uid: string): Promise<string | null> {
+  const rows = unwrap<Array<{ thread_id: string }>>(
+    await rt.svc.from('assistant_messages').select('thread_id').eq('owner_user_id', uid).is('archived_at', null).order('created_at', { ascending: false }).limit(1),
+  )
+  return rows?.[0]?.thread_id ?? null
+}
+
+async function pendingViews(rt: AssistantRuntime, uid: string, ids: string[]): Promise<PendingView[]> {
+  if (!ids.length) return []
+  const rows = unwrap<PendingRow[]>(await rt.svc.from('assistant_pending').select('*').eq('owner_user_id', uid).in('id', ids))
+  return (rows ?? []).map(pendingViewOf)
+}
+
+async function listThreads(rt: AssistantRuntime, uid: string, limit: number): Promise<ThreadsResponse> {
+  const rows = await callRpc<Array<{ thread_id: string; first_user_body: string | null; started_at: string; archived_at: string; message_count: number }>>(rt.svc, 'rpc_assistant_list_threads', { p_owner: uid, p_limit: limit })
+  return {
+    threads: (rows ?? []).map((r) => ({ thread_id: r.thread_id, title: threadTitle(r.first_user_body), started_at: r.started_at, archived_at: r.archived_at, message_count: r.message_count })),
+  }
+}
+
+/** Read-only: only an archived thread of the same owner; anything else is a 404. */
+async function getThread(rt: AssistantRuntime, uid: string, threadId: string): Promise<AssistantReply> {
+  const rows = unwrap<Row[]>(
+    await rt.svc.from('assistant_messages').select(COLS).eq('owner_user_id', uid).eq('thread_id', threadId).not('archived_at', 'is', null).order('created_at', { ascending: true }),
+  )
+  if (!rows?.length) return err(404, 'Conversa não encontrada.')
+  const messages = rows.filter((r) => !r.meta?.hidden).map(viewOf)
+  const ids = [...new Set(messages.flatMap((m) => (m.card && 'pending_id' in m.card ? [m.card.pending_id] : [])))]
+  return { status: 200, body: { messages, pendings: await pendingViews(rt, uid, ids) } }
+}
+
+const LOG_COLS = 'pending_id,action_index,kind,summary,amount_cents,entry_id,client_name,status,error_code,executed_at,undone_at'
+
+async function listActions(rt: AssistantRuntime, uid: string, limit: number, offset: number): Promise<ActionsResponse> {
+  const rows = unwrap<Array<Omit<ActionLogItem, 'undoable'>>>(
+    await rt.svc.from('assistant_actions_log').select(LOG_COLS).eq('owner_user_id', uid)
+      .order('executed_at', { ascending: false }).order('pending_id', { ascending: true }).order('action_index', { ascending: true })
+      .range(offset, offset + limit),
+  )
+  const page = (rows ?? []).slice(0, limit)
+  const ids = [...new Set(page.map((r) => r.pending_id))]
+  const pend = ids.length ? unwrap<Array<{ id: string; undo: UndoItem[] | null }>>(await rt.svc.from('assistant_pending').select('id,undo').eq('owner_user_id', uid).in('id', ids)) : []
+  const undo = new Map((pend ?? []).map((x) => [x.id, x.undo ?? []]))
+  return {
+    actions: page.map((r) => ({ ...r, undoable: r.status === 'done' && (undo.get(r.pending_id) ?? []).some((u) => u.index === r.action_index && !u.done) })),
+    has_more: (rows ?? []).length > limit,
+  }
+}
+
+/** Undo from the log: the stored undo data and the same RPCs. A blocked undo returns the RPC message and changes nothing. */
+async function onUndoLogged(t: Turn, pendingId: string, index: number): Promise<UndoLoggedResponse> {
+  const nothing = { ok: false, message: 'Não há nada para desfazer aqui.' }
+  try {
+    const row = unwrap<{ status: string } | null>(
+      await t.rt.svc.from('assistant_actions_log').select('status').eq('owner_user_id', t.uid).eq('pending_id', pendingId).eq('action_index', index).maybeSingle(),
+    )
+    const p = await loadPending(t, pendingId)
+    const item = (p?.undo ?? []).find((u) => u.index === index && !u.done)
+    if (!p || row?.status !== 'done' || !item) return nothing
+    const r = await runUndo(t.userDb, item)
+    if (!r.ok) return { ok: false, message: r.message }
+    const undo = (p.undo ?? []).map((u) => (u.index === index ? { ...u, done: true } : u))
+    await callRpc(t.rt.svc, 'rpc_assistant_mark_undone', { p_owner: t.uid, p_pending_id: p.id, p_undo: undo, p_indexes: [index] })
+    return { ok: true, message: `Desfeito: ${item.label}.` }
+  } catch (e) {
+    t.rt.log('assistant_failed', { action: 'undo_logged', error: String(e instanceof Error ? e.message : e) })
+    return { ok: false, message: 'Algo deu errado do meu lado. Confira o lançamento antes de tentar de novo.' }
+  }
 }

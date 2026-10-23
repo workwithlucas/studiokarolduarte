@@ -77,16 +77,18 @@ function useMinutesLeft(expiresAt: string, active: boolean): number | null {
 }
 
 export function ProposalCard({
-  card, pending, busy, onConfirm, onCancel,
+  card, pending, busy, readOnly = false, onConfirm, onCancel,
 }: {
   card: Of<'proposal'>
   pending: PendingView | undefined
   busy: boolean
+  /** Cards of an archived conversation: no Confirmar, no Cancelar. */
+  readOnly?: boolean
   onConfirm: () => void
   onCancel: () => void
 }) {
   const status = pending?.status ?? 'pending'
-  const open = status === 'pending'
+  const open = status === 'pending' && !readOnly
   const left = useMinutesLeft(card.expires_at, open)
   const timedOut = open && left !== null && left <= 0
   return (
@@ -119,18 +121,19 @@ export function ProposalCard({
           <p className="text-help">{timedOut ? 'Essa proposta expirou.' : left !== null ? `Vale por mais ${left} min.` : null}</p>
         </div>
       ) : (
-        <Pill tone={STATUS[status].tone}>{STATUS[status].label}</Pill>
+        <Pill tone={readOnly && status === 'pending' ? 'neutral' : STATUS[status].tone}>{readOnly && status === 'pending' ? 'Arquivada' : STATUS[status].label}</Pill>
       )}
     </Frame>
   )
 }
 
 export function ResultCard({
-  card, pending, busy, onUndo,
+  card, pending, busy, readOnly = false, onUndo,
 }: {
   card: Of<'result'>
   pending: PendingView | undefined
   busy: boolean
+  readOnly?: boolean
   onUndo: (index: number) => void
 }) {
   return (
@@ -143,7 +146,7 @@ export function ResultCard({
             </span>
             <span className="sr-only">{l.ok ? 'Feito:' : 'Não feito:'}</span>
             <span className="min-w-0 flex-1 break-words">{l.text}</span>
-            {l.ok && pending?.undoable.includes(l.index) && (
+            {!readOnly && l.ok && pending?.undoable.includes(l.index) && (
               <Button variant="secondary" onClick={() => onUndo(l.index)} disabled={busy}>
                 Desfazer
               </Button>

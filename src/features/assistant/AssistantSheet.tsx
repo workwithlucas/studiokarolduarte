@@ -1,13 +1,17 @@
 // Owner-only finance chat. Loaded lazily (AssistantLauncher), so the rest of the app does not grow.
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Send } from 'lucide-react'
+import { Plus, Send } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { Button, Chip, ChipRow, EmptyState, Input, Sheet, Skeleton } from '../../components/ui'
+import { Button, Chip, ChipRow, EmptyState, Input, Sheet, Skeleton, TabLabel, TabList } from '../../components/ui'
 import {
   invalidateAfterWrite, invokeAssistant, loadThread, mergeMessages, mergePendings,
   type AssistantBody, type MessageView, type PendingView,
 } from '../../lib/assistantQueries'
-import { Bubble, ChoiceChips, EntriesCard, FactsCard, ProposalCard, QuestionChips, ResultCard, Typing } from './cards'
+import { Bubble, Typing } from './cards'
+import { ActionsPanel, HistoryPanel } from './HistoryPanels'
+import { MessageList } from './MessageList'
+
+type Tab = 'chat' | 'history' | 'actions'
 
 const STARTERS = [
   { label: 'Lançar despesa', text: 'Lançar despesa' },
@@ -30,6 +34,8 @@ export default function AssistantSheet({ open, onClose }: { open: boolean; onClo
   const [optimistic, setOptimistic] = useState<string | null>(null)
   const [failure, setFailure] = useState<Failure | null>(null)
   const [draft, setDraft] = useState('')
+  const [tab, setTab] = useState<Tab>('chat')
+  const [askNew, setAskNew] = useState(false)
   const end = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -76,7 +82,28 @@ export default function AssistantSheet({ open, onClose }: { open: boolean; onClo
   }
 
   const empty = loaded && messages.length === 0 && !optimistic
-  const lastId = messages[messages.length - 1]?.id
+
+  // The current conversation goes to the Histórico; what is on screen starts empty.
+  async function startNew() {
+    setBusy(true)
+    setFailure(null)
+    try {
+      await invokeAssistant({ action: 'new_thread' })
+      setMessages([])
+      setPendings({})
+      setLoaded(true)
+      setAskNew(false)
+      void qc.invalidateQueries({ queryKey: ['assistant-threads'] })
+    } catch (e) {
+      setFailure({ message: e instanceof Error ? e.message : 'Algo deu errado. Tente novamente.', retry: () => void startNew() })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // An undo done from the log: the card of the conversation must not offer it again.
+  const onLogUndone = (pendingId: string, index: number) =>
+    setPendings((p) => (p[pendingId] ? { ...p, [pendingId]: { ...p[pendingId]!, undoable: p[pendingId]!.undoable.filter((i) => i !== index) } } : p))
 
   return (
     <Sheet
@@ -85,6 +112,7 @@ export default function AssistantSheet({ open, onClose }: { open: boolean; onClo
       kicker="Financeiro"
       title="Assistente"
       footer={
+        tab !== 'chat' ? undefined : (
         <form onSubmit={onSubmit} className="flex gap-2">
           <Input
             value={draft}
@@ -97,8 +125,37 @@ export default function AssistantSheet({ open, onClose }: { open: boolean; onClo
           />
           <Button type="submit" aria-label="Enviar" disabled={busy || !draft.trim()} icon={<Send size={18} />} />
         </form>
+        )
       }
     >
+      <div className="mb-4 space-y-3">
+        <TabList>
+          <TabLabel active={tab === 'chat'} onClick={() => setTab('chat')}>Conversa</TabLabel>
+          <TabLabel active={tab === 'history'} onClick={() => setTab('history')}>Histórico</TabLabel>
+          <TabLabel active={tab === 'actions'} onClick={() => setTab('actions')}>Ações</TabLabel>
+        </TabList>
+        {tab === 'chat' && !askNew && (
+          <Button variant="secondary" icon={<Plus size={18} />} onClick={() => setAskNew(true)} disabled={busy || messages.length === 0}>
+            Nova conversa
+          </Button>
+        )}
+        {tab === 'chat' && askNew && (
+          <div role="alertdialog" aria-label="Nova conversa" className="space-y-3 rounded-[var(--radius-input)] border border-border-gold bg-surface-2 p-4">
+            <p className="text-sm">A conversa atual vai para o Histórico.</p>
+            <div className="flex gap-2">
+              <Button block onClick={() => void startNew()} disabled={busy}>
+                Confirmar
+              </Button>
+              <Button block variant="secondary" onClick={() => setAskNew(false)} disabled={busy}>
+                Voltar
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+      {tab === 'history' && <HistoryPanel />}
+      {tab === 'actions' && <ActionsPanel onUndone={onLogUndone} />}
+      {tab === 'chat' && (
       <div className="space-y-3" aria-live="polite">
         {thread.isLoading && !loaded && <Skeleton className="h-24" />}
         {thread.isError && !loaded && <p className="text-help">Não consegui carregar a conversa anterior. Você ainda pode escrever.</p>}
@@ -117,52 +174,18 @@ export default function AssistantSheet({ open, onClose }: { open: boolean; onClo
             }
           />
         )}
-        {messages.map((m) => {
-          if (m.role !== 'card') return m.body ? <Bubble key={m.id} role={m.role}>{m.body}</Bubble> : null
-          const c = m.card
-          if (!c) return null
-          const active = m.id === lastId && !busy
-          switch (c.kind) {
-            case 'proposal':
-              return (
-                <ProposalCard
-                  key={m.id}
-                  card={c}
-                  pending={pendings[c.pending_id]}
-                  busy={busy}
-                  onConfirm={() => void run({ action: 'confirm', pending_id: c.pending_id, request_id: crypto.randomUUID() })}
-                  onCancel={() => void run({ action: 'cancel', pending_id: c.pending_id, request_id: crypto.randomUUID() })}
-                />
-              )
-            case 'result':
-              return (
-                <ResultCard
-                  key={m.id}
-                  card={c}
-                  pending={pendings[c.pending_id]}
-                  busy={busy}
-                  onUndo={(index) => void run({ action: 'undo', pending_id: c.pending_id, action_index: index, request_id: crypto.randomUUID() })}
-                />
-              )
-            case 'choice':
-              return (
-                <ChoiceChips
-                  key={m.id}
-                  card={c}
-                  disabled={!active}
-                  onPick={(value, label) => void run({ action: 'message', text: label, pick: { choice_id: c.choice_id, value }, request_id: crypto.randomUUID() }, label)}
-                />
-              )
-            case 'question':
-              return <QuestionChips key={m.id} card={c} disabled={!active} onAnswer={send} />
-            case 'entries':
-              return <EntriesCard key={m.id} card={c} />
-            case 'facts':
-              return <FactsCard key={m.id} card={c} />
-            default:
-              return null
-          }
-        })}
+        <MessageList
+          messages={messages}
+          pendings={pendings}
+          busy={busy}
+          handlers={{
+            onConfirm: (id) => void run({ action: 'confirm', pending_id: id, request_id: crypto.randomUUID() }),
+            onCancel: (id) => void run({ action: 'cancel', pending_id: id, request_id: crypto.randomUUID() }),
+            onUndo: (id, index) => void run({ action: 'undo', pending_id: id, action_index: index, request_id: crypto.randomUUID() }),
+            onPick: (choiceId, value, label) => void run({ action: 'message', text: label, pick: { choice_id: choiceId, value }, request_id: crypto.randomUUID() }, label),
+            onAnswer: send,
+          }}
+        />
         {optimistic && <Bubble role="user">{optimistic}</Bubble>}
         {busy && <Typing />}
         {failure && (
@@ -175,6 +198,7 @@ export default function AssistantSheet({ open, onClose }: { open: boolean; onClo
         )}
         <div ref={end} />
       </div>
+      )}
     </Sheet>
   )
 }

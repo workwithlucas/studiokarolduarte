@@ -7,7 +7,7 @@ import { messageOfCode } from './errors-pt.ts'
 import type { Db } from './types.ts'
 
 export type ActionOutcome =
-  | { ok: true; text: string; undo: UndoItem | null }
+  | { ok: true; text: string; undo: UndoItem | null; entryId?: string }
   | { ok: false; code: string; message: string }
 
 const uuidOf = (x: unknown): string | null => (typeof x === 'string' ? x : null)
@@ -51,6 +51,7 @@ async function run(db: Db, pendingId: string, index: number, item: PendingAction
         ok: true,
         text: `${exp ? 'despesa' : 'receita'} lançada: ${p.description}, ${fmtMoney(p.amount_cents)}${p.pay_now ? ` (${exp ? 'paga' : 'recebida'} no ${METHOD_LABEL[p.method] ?? p.method})` : ' (em aberto)'}`,
         undo: { index, label: 'lançamento cancelado', steps, done: false },
+        entryId: id,
       }
     }
     case 'register_payments':
@@ -139,12 +140,46 @@ async function run(db: Db, pendingId: string, index: number, item: PendingAction
   }
 }
 
+/** One row for assistant_actions_log, built by code from the outcome (the text is the confirmation line). */
+export interface LogItem {
+  action_index: number
+  kind: string
+  summary: string
+  amount_cents: number | null
+  entry_id: string | null
+  client_name: string | null
+  status: 'done' | 'failed'
+  error_code: string | null
+}
+
 export interface ExecutionSummary {
   status: 'confirmed' | 'failed'
   lines: ResultLine[]
   undo: UndoItem[]
   reply: string
+  log: LogItem[]
 }
+
+const capitalize = (t: string) => (t ? t[0]!.toUpperCase() + t.slice(1) : t)
+const INT_MAX = 2_147_483_647
+
+/** The value of an action in cents: its amount, or the sum of its payments. Null when it has none. */
+export function amountOf(params: Record<string, unknown>): number | null {
+  const ok = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= INT_MAX
+  if (ok(params.amount_cents)) return params.amount_cents
+  if (Array.isArray(params.payments) && params.payments.length) {
+    let sum = 0
+    for (const p of params.payments as Array<{ amount_cents?: unknown }>) {
+      if (!ok(p?.amount_cents)) return null
+      sum += p.amount_cents
+    }
+    return sum <= INT_MAX ? sum : null
+  }
+  return null
+}
+
+const clientOf = (a: PendingActionItem): string | null => a.summary.lines.find((l) => l.label === 'Cliente')?.value ?? null
+const entryOf = (a: PendingActionItem, created?: string): string | null => created ?? (typeof a.params.entry_id === 'string' ? a.params.entry_id : null)
 
 /** Runs every action in order; one failure does not stop the others. The reply is built here, never by the model. */
 export async function executeAll(db: Db, pendingId: string, actions: PendingActionItem[]): Promise<ExecutionSummary> {
@@ -152,6 +187,7 @@ export async function executeAll(db: Db, pendingId: string, actions: PendingActi
   const undo: UndoItem[] = []
   const done: string[] = []
   const failed: string[] = []
+  const log: LogItem[] = []
   for (let i = 0; i < actions.length; i++) {
     const a = actions[i]!
     const out = await executeAction(db, pendingId, i, a)
@@ -159,17 +195,19 @@ export async function executeAll(db: Db, pendingId: string, actions: PendingActi
       lines.push({ index: i, ok: true, text: out.text })
       done.push(out.text)
       if (out.undo) undo.push(out.undo)
+      log.push({ action_index: i, kind: a.kind, summary: capitalize(out.text), amount_cents: amountOf(a.params), entry_id: entryOf(a, out.entryId), client_name: clientOf(a), status: 'done', error_code: null })
     } else {
       const t = `${a.summary.title}: ${out.message}`
       lines.push({ index: i, ok: false, text: t })
       failed.push(t)
+      log.push({ action_index: i, kind: a.kind, summary: t, amount_cents: amountOf(a.params), entry_id: entryOf(a), client_name: clientOf(a), status: 'failed', error_code: out.code })
     }
   }
   const reply = [
     done.length ? `Feito: ${done.join('; ')}.` : '',
     failed.length ? `${done.length ? 'Não consegui' : 'Não consegui concluir'}: ${failed.join('; ')}` : '',
   ].filter(Boolean).join(' ')
-  return { status: done.length === 0 ? 'failed' : 'confirmed', lines, undo, reply }
+  return { status: done.length === 0 ? 'failed' : 'confirmed', lines, undo, reply, log }
 }
 
 /** Runs the stored inverse of one action through the same RPCs. A blocked undo returns the RPC message. */

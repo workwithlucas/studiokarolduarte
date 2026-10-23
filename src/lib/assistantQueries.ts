@@ -1,11 +1,14 @@
 // Finance assistant client: talks to the assistant-chat function (the only way it writes) and reads the thread
 // from its owner-only tables. Money and dates in the cards are built by the function; nothing is computed here.
 import type { QueryClient } from '@tanstack/react-query'
-import type { AssistantBody, AssistantResponse, Card, MessageView, PendingView, UndoItem } from '../../supabase/functions/_shared/assistant-types'
+import type {
+  ActionLogItem, ActionsResponse, AssistantBody, AssistantResponse, Card, MessageView, PendingView, ThreadSummary, ThreadsResponse, UndoItem,
+  UndoLoggedResponse,
+} from '../../supabase/functions/_shared/assistant-types'
 import { pendingViewOf } from '../../supabase/functions/_shared/assistant-state'
 import { supabase } from './supabase'
 
-export type { AssistantBody, AssistantResponse, Card, MessageView, PendingView }
+export type { ActionLogItem, ActionsResponse, AssistantBody, AssistantResponse, Card, MessageView, PendingView, ThreadSummary, ThreadsResponse, UndoLoggedResponse }
 
 /** Everything an executed action or an undo can change on screen: finance, agenda, packages and client pages. */
 export const ASSISTANT_INVALIDATE_KEYS = [
@@ -31,7 +34,7 @@ export function invalidateAfterWrite(qc: Pick<QueryClient, 'invalidateQueries'>)
 
 const CONNECTION = 'Não consegui falar com o assistente. Confira a conexão e tente de novo.'
 
-export async function invokeAssistant(body: AssistantBody): Promise<AssistantResponse> {
+async function callFunction(body: AssistantBody): Promise<unknown> {
   const { data, error } = await supabase.functions.invoke('assistant-chat', { body })
   if (error) {
     let message = CONNECTION
@@ -46,9 +49,40 @@ export async function invokeAssistant(body: AssistantBody): Promise<AssistantRes
     }
     throw new Error(message)
   }
-  const res = data as Partial<AssistantResponse> | null
+  return data
+}
+
+export async function invokeAssistant(body: AssistantBody): Promise<AssistantResponse> {
+  const res = (await callFunction(body)) as Partial<AssistantResponse> | null
   if (!res || !Array.isArray(res.messages)) throw new Error(CONNECTION)
   return { messages: res.messages, pendings: res.pendings ?? [] }
+}
+
+export async function listThreads(): Promise<ThreadSummary[]> {
+  const res = (await callFunction({ action: 'list_threads' })) as Partial<ThreadsResponse> | null
+  if (!res || !Array.isArray(res.threads)) throw new Error(CONNECTION)
+  return res.threads
+}
+
+/** Read-only messages of an archived thread. */
+export async function getThread(threadId: string): Promise<AssistantResponse> {
+  const res = (await callFunction({ action: 'get_thread', thread_id: threadId })) as Partial<AssistantResponse> | null
+  if (!res || !Array.isArray(res.messages)) throw new Error(CONNECTION)
+  return { messages: res.messages, pendings: res.pendings ?? [] }
+}
+
+export const ACTIONS_PAGE = 50
+
+export async function listActions(offset: number): Promise<ActionsResponse> {
+  const res = (await callFunction({ action: 'list_actions', limit: ACTIONS_PAGE, offset })) as Partial<ActionsResponse> | null
+  if (!res || !Array.isArray(res.actions)) throw new Error(CONNECTION)
+  return { actions: res.actions, has_more: res.has_more === true }
+}
+
+export async function undoLogged(pendingId: string, actionIndex: number): Promise<UndoLoggedResponse> {
+  const res = (await callFunction({ action: 'undo_logged', pending_id: pendingId, action_index: actionIndex })) as Partial<UndoLoggedResponse> | null
+  if (!res || typeof res.ok !== 'boolean' || typeof res.message !== 'string') throw new Error(CONNECTION)
+  return { ok: res.ok, message: res.message }
 }
 
 /** Last messages of the owner's thread (RLS: owner only) plus the state of the proposals they mention. */
@@ -56,6 +90,7 @@ export async function loadThread(): Promise<AssistantResponse> {
   const { data, error } = await supabase
     .from('assistant_messages')
     .select('id,role,body,card,meta,created_at')
+    .is('archived_at', null)
     .order('created_at', { ascending: false })
     .limit(60)
   if (error) throw new Error('Não consegui carregar a conversa.')

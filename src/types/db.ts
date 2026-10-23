@@ -431,8 +431,57 @@ export type Database = {
           },
         ]
       }
+      assistant_actions_log: {
+        Row: {
+          action_index: number
+          amount_cents: number | null
+          client_name: string | null
+          entry_id: string | null
+          error_code: string | null
+          executed_at: string
+          id: string
+          kind: string
+          owner_user_id: string
+          pending_id: string
+          status: string
+          summary: string
+          undone_at: string | null
+        }
+        Insert: {
+          action_index: number
+          amount_cents?: number | null
+          client_name?: string | null
+          entry_id?: string | null
+          error_code?: string | null
+          executed_at?: string
+          id?: string
+          kind: string
+          owner_user_id: string
+          pending_id: string
+          status: string
+          summary: string
+          undone_at?: string | null
+        }
+        Update: {
+          action_index?: number
+          amount_cents?: number | null
+          client_name?: string | null
+          entry_id?: string | null
+          error_code?: string | null
+          executed_at?: string
+          id?: string
+          kind?: string
+          owner_user_id?: string
+          pending_id?: string
+          status?: string
+          summary?: string
+          undone_at?: string | null
+        }
+        Relationships: []
+      }
       assistant_messages: {
         Row: {
+          archived_at: string | null
           body: string | null
           card: Json | null
           created_at: string
@@ -440,8 +489,10 @@ export type Database = {
           meta: Json | null
           owner_user_id: string
           role: string
+          thread_id: string
         }
         Insert: {
+          archived_at?: string | null
           body?: string | null
           card?: Json | null
           created_at?: string
@@ -449,8 +500,10 @@ export type Database = {
           meta?: Json | null
           owner_user_id: string
           role: string
+          thread_id: string
         }
         Update: {
+          archived_at?: string | null
           body?: string | null
           card?: Json | null
           created_at?: string
@@ -458,6 +511,7 @@ export type Database = {
           meta?: Json | null
           owner_user_id?: string
           role?: string
+          thread_id?: string
         }
         Relationships: []
       }
@@ -471,6 +525,7 @@ export type Database = {
           owner_user_id: string
           result: Json | null
           status: string
+          thread_id: string | null
           undo: Json | null
         }
         Insert: {
@@ -482,6 +537,7 @@ export type Database = {
           owner_user_id: string
           result?: Json | null
           status?: string
+          thread_id?: string | null
           undo?: Json | null
         }
         Update: {
@@ -493,6 +549,7 @@ export type Database = {
           owner_user_id?: string
           result?: Json | null
           status?: string
+          thread_id?: string | null
           undo?: Json | null
         }
         Relationships: []
@@ -1906,6 +1963,41 @@ export type Database = {
       rpc_apply_package_to_appointment: {
         Args: { p_appointment_id: string; p_client_package_id?: string }
         Returns: Json
+      }
+      rpc_assistant_list_threads: {
+        Args: { p_limit: number; p_owner: string }
+        Returns: {
+          archived_at: string
+          first_user_body: string
+          message_count: number
+          started_at: string
+          thread_id: string
+        }[]
+      }
+      rpc_assistant_mark_undone: {
+        Args: {
+          p_indexes: number[]
+          p_owner: string
+          p_pending_id: string
+          p_undo: Json
+        }
+        Returns: undefined
+      }
+      rpc_assistant_new_thread: {
+        Args: { p_owner: string; p_thread: string }
+        Returns: undefined
+      }
+      rpc_assistant_record_execution: {
+        Args: {
+          p_executed_at: string
+          p_log: Json
+          p_owner: string
+          p_pending_id: string
+          p_result: Json
+          p_status: string
+          p_undo: Json
+        }
+        Returns: undefined
       }
       rpc_book_appointment: {
         Args: {

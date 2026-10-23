@@ -159,6 +159,7 @@ async function ensureFixtures() {
 
 async function reset() {
   world.reset()
+  await q('delete from assistant_actions_log')
   await q('delete from assistant_messages')
   await q('delete from assistant_pending')
   const clients = "select id from clients where name like 'ZZS %'"
@@ -560,7 +561,7 @@ sc('17 access control', async () => {
 })
 
 sc('18 rate limit: the 31st request in 10 minutes', async () => {
-  for (let i = 0; i < 29; i++) await q("insert into assistant_messages (owner_user_id, role, body) values ($1,'user','x')", [ownerId])
+  for (let i = 0; i < 29; i++) await q("insert into assistant_messages (owner_user_id, thread_id, role, body) values ($1,'00000000-0000-0000-0000-0000000000aa','user','x')", [ownerId])
   world.script = [() => [text('Oi.')], () => [text('Oi.')]]
   const ok = await say('30ª')
   check('30th request allowed', ok.status === 200)
@@ -704,6 +705,166 @@ sc('24 max 6 tool iterations then a closing call without tools', async () => {
   const r = await say('procurar')
   check('7 model calls, last one with tools disabled', world.llmCalls === 7 && world.requests[6].tool_choice?.type === 'none')
   check('answered', textOf(r) === 'Não achei nada.')
+})
+
+// ---------------------------------------------------------------- Task 16: history, archive, actions log
+const newThread = (jwt: string | null = ownerJwt) => call({ action: 'new_thread' }, jwt)
+const listThreads = (extra: Record<string, unknown> = {}) => call({ action: 'list_threads', ...extra })
+const getThread = (id: string, jwt: string | null = ownerJwt) => call({ action: 'get_thread', thread_id: id }, jwt)
+const listActions = (extra: Record<string, unknown> = {}) => call({ action: 'list_actions', ...extra })
+const undoLogged = (id: string, idx: number) => call({ action: 'undo_logged', pending_id: id, action_index: idx })
+const logRows = (pendingId?: string) =>
+  q<any>(`select * from assistant_actions_log ${pendingId ? 'where pending_id = $1' : ''} order by executed_at, action_index`, pendingId ? [pendingId] : [])
+const expense = (payee: string, cents: number, paid = false): Step[] => [
+  () => [tu('propose_expense', { payee, reason: 'x', amount_cents: cents, paid, ...(paid ? { method: 'pix' } : {}) })],
+  () => [text('Preparei.')],
+]
+
+sc('25 new_thread archives, cancels open proposals and resets the model context', async () => {
+  world.script = expense('ZZS T1', 1000)
+  const r = await say('primeira conversa sobre gás')
+  const id = proposalOf(r)!.pending_id
+  const before = (await q<any>('select thread_id from assistant_messages limit 1'))[0].thread_id
+  const empty = await newThread()
+  check('returns an empty thread', empty.status === 200 && empty.messages.length === 0)
+  check('every message archived', (await q<any>('select count(*)::int as n from assistant_messages where archived_at is null'))[0].n === 0)
+  check('open proposal of the thread cancelled', (await pendingRow(id)).status === 'cancelled')
+  const again = await newThread()
+  check('new_thread on an empty thread changes nothing', again.status === 200 && (await q<any>('select count(distinct archived_at)::int as n from assistant_messages'))[0].n === 1)
+  world.script = [() => [text('Ok.')]]
+  await say('segunda conversa')
+  const req = world.requests.at(-1)
+  check('the stub receives only the new thread', req.messages.length === 1 && req.messages[0].content === 'segunda conversa', JSON.stringify(req.messages))
+  const t2 = await q<any>('select distinct thread_id from assistant_messages where archived_at is null')
+  check('new messages go to a new thread', t2.length === 1 && t2[0].thread_id !== before)
+})
+
+sc('26 a proposal in an archived thread cannot be confirmed or cancelled', async () => {
+  world.script = expense('ZZS Arq', 1000)
+  const id = proposalOf(await say('despesa'))!.pending_id
+  await newThread()
+  await q("update assistant_pending set status = 'pending' where id = $1", [id]) // as if it were still open
+  const c = await confirm(id)
+  check('confirm: archived message, nothing executed', textOf(c) === 'Esta proposta é de uma conversa arquivada.' && (await entriesLike('ZZS Arq%')).length === 0 && (await pendingRow(id)).status === 'pending')
+  const x = await cancel(id)
+  check('cancel: archived message, status untouched', textOf(x) === 'Esta proposta é de uma conversa arquivada.' && (await pendingRow(id)).status === 'pending')
+  check('nothing logged', (await logRows()).length === 0)
+})
+
+sc('27 list_threads order and titles; get_thread is read-only and owner-only', async () => {
+  world.script = [() => [text('Ok.')], () => [text('Ok.')], () => [text('Ok.')]]
+  await say('Primeira conversa')
+  await newThread()
+  await say('  Segunda   conversa com um título bem longo que passa de sessenta caracteres no total  ')
+  await newThread()
+  await say('Terceira, ainda aberta')
+  const l = await listThreads()
+  const th = l.body.threads as any[]
+  check('archived only, newest first', th.length === 2 && th[1].title === 'Primeira conversa' && th[0].title.startsWith('Segunda conversa com um título'), JSON.stringify(th.map((t) => t.title)))
+  check('title is at most 60 characters', th[0].title.length <= 60)
+  check('message count and dates', th[1].message_count === 2 && !!th[1].started_at && !!th[1].archived_at, JSON.stringify(th[1]))
+  check('limit', ((await listThreads({ limit: 1 })).body.threads as any[]).length === 1)
+  check('limit above 100 is clamped, not an error', (await listThreads({ limit: 1000 })).status === 200)
+  const one = await getThread(th[1].thread_id)
+  check('get_thread returns the archived messages', one.status === 200 && one.messages.length === 2 && one.messages[0]!.body === 'Primeira conversa')
+  const cur = (await q<any>('select thread_id from assistant_messages where archived_at is null limit 1'))[0].thread_id
+  check('the current thread is not readable this way: 404', (await getThread(cur)).status === 404)
+  const other = crypto.randomUUID()
+  const otherThread = crypto.randomUUID()
+  await q("insert into assistant_messages (owner_user_id, thread_id, role, body, archived_at) values ($1,$2,'user','de outra dona', now())", [other, otherThread])
+  check('thread of another owner: 404', (await getThread(otherThread)).status === 404)
+  check('unknown thread: 404', (await getThread(crypto.randomUUID())).status === 404)
+  check('invalid id: 400', (await call({ action: 'get_thread', thread_id: 'x' })).status === 400)
+  check('other owner never listed', ((await listThreads()).body.threads as any[]).every((t) => t.thread_id !== otherThread))
+  await q('delete from assistant_messages where owner_user_id = $1', [other])
+})
+
+sc('28 confirm writes the log, double confirm adds none, failed action logged with its code', async () => {
+  world.script = [
+    () => [
+      tu('propose_expense', { payee: 'ZZS L1', reason: 'um', amount_cents: 1000, paid: false }),
+      tu('propose_expense', { payee: 'ZZS L2', reason: 'dois', amount_cents: 2000, paid: false }),
+      tu('propose_expense', { payee: 'ZZS L3', reason: 'tres', amount_cents: 3000, paid: true, method: 'pix' }),
+    ],
+    () => [text('Preparei.')],
+  ]
+  const prop = proposalOf(await say('três despesas'))!
+  check('no log row before confirm', (await logRows()).length === 0)
+  await q("update assistant_pending set actions = jsonb_set(actions, '{1,params,amount_cents}', '-5') where id = $1", [prop.pending_id])
+  const c = await confirm(prop.pending_id)
+  const rows = await logRows(prop.pending_id)
+  check('one row per action', rows.length === 3 && rows.map((r: any) => r.action_index).join() === '0,1,2')
+  check('done row: kind, summary built by code, amount, status', rows[0].status === 'done' && rows[0].kind === 'create_entry' && rows[0].amount_cents === 1000 && rows[0].summary.startsWith('Despesa lançada') && rows[0].summary.includes('R$ 10,00'), rows[0].summary)
+  check('summary equals the confirmation line of the reply', textOf(c).includes(rows[0].summary.charAt(0).toLowerCase() + rows[0].summary.slice(1)))
+  check('failed row with its code and the RPC message', rows[1].status === 'failed' && !!rows[1].error_code && rows[1].summary.includes('Valor inválido.'), JSON.stringify(rows[1]))
+  check('entry id recorded for created entries', !!rows[0].entry_id && rows[0].entry_id === (await entriesLike('ZZS L1%'))[0].id)
+  check('executed_at set, undone_at null', !!rows[0].executed_at && rows[0].undone_at === null)
+  const row = await pendingRow(prop.pending_id)
+  check('pending and log agree on the time', new Date(row.executed_at).getTime() === new Date(rows[0].executed_at).getTime())
+  await confirm(prop.pending_id)
+  await confirm(prop.pending_id)
+  check('double confirm adds no rows', (await logRows(prop.pending_id)).length === 3)
+  await q('select rpc_assistant_record_execution($1,$2,$3,now(),$4,$5,$6)', [ownerId, prop.pending_id, 'confirmed', row.result, JSON.stringify(row.undo), JSON.stringify([{ action_index: 0, kind: 'x', summary: 'repetida', status: 'done' }])])
+  const again = await logRows(prop.pending_id)
+  check('repeated record adds nothing (unique pending_id + index)', again.length === 3 && again[0].summary !== 'repetida')
+  const l = await listActions()
+  check('list_actions: newest first with undoable flags', l.status === 200 && (l.body.actions as any[]).length === 3 && (l.body.actions as any[]).filter((a) => a.undoable).length === 2 && l.body.has_more === false)
+})
+
+sc('29 undo from the card and undo_logged both set undone and undone_at; a blocked undo leaves done', async () => {
+  world.script = [() => [tu('propose_expense', { payee: 'ZZS M1', reason: 'a', amount_cents: 1000, paid: true, method: 'cash' })], () => [text('Ok.')]]
+  const p1 = proposalOf(await say('paga'))!.pending_id
+  await confirm(p1)
+  await undo(p1)
+  const r1 = (await logRows(p1))[0]
+  check('card undo: status undone with undone_at', r1.status === 'undone' && !!r1.undone_at, JSON.stringify(r1))
+  check('undone rows no longer undoable in the list', ((await listActions()).body.actions as any[]).every((a) => !a.undoable))
+  world.script = expense('ZZS M2', 1500)
+  const p2 = proposalOf(await say('aberta'))!.pending_id
+  await confirm(p2)
+  check('listed as undoable before', ((await listActions()).body.actions as any[]).find((a) => a.pending_id === p2)?.undoable === true)
+  const ent = (await entriesLike('ZZS M2%'))[0]
+  await q("select rpc_register_payments($1,null,'[{\"amount_cents\":1500,\"method\":\"pix\"}]'::jsonb,null)", [ent.id])
+  const blocked = await undoLogged(p2, 0)
+  const afterBlock = (await logRows(p2))[0]
+  check('blocked undo: RPC message, row unchanged', blocked.status === 200 && blocked.body.ok === false && blocked.body.message.includes('estorne') && afterBlock.status === 'done' && afterBlock.undone_at === null, JSON.stringify(blocked.body))
+  check('still offered after a blocked undo', ((await listActions()).body.actions as any[]).find((a) => a.pending_id === p2)?.undoable === true)
+  await q('select rpc_reverse_payment(id) from ledger_payments where entry_id = $1', [ent.id])
+  const ok = await undoLogged(p2, 0)
+  const r2 = (await logRows(p2))[0]
+  check('undo_logged: ok, status undone, undone_at set', ok.body.ok === true && r2.status === 'undone' && !!r2.undone_at && (await entriesLike('ZZS M2%')).length === 0, JSON.stringify(ok.body))
+  check('pending undo data marked done', (await pendingRow(p2)).undo.every((u: any) => u.done === true))
+  const twice = await undoLogged(p2, 0)
+  check('undo_logged twice is harmless', twice.body.ok === false && (await logRows(p2))[0].status === 'undone')
+  check('unknown row', (await undoLogged(crypto.randomUUID(), 0)).body.ok === false)
+  check('bad index: 400', (await call({ action: 'undo_logged', pending_id: p2, action_index: 99 })).status === 400)
+})
+
+sc('30 list_actions paginates; professional JWT is 403 on every new action; rate limit applies', async () => {
+  const pid = crypto.randomUUID()
+  await q("insert into assistant_pending (id, owner_user_id, actions, status) values ($1,$2,'[{\"kind\":\"void_entry\"}]','confirmed')", [pid, ownerId])
+  for (let i = 0; i < 7; i++) await q("insert into assistant_actions_log (owner_user_id, pending_id, action_index, kind, summary, status, executed_at) values ($1,$2,$3,'void_entry',$4,'done', now() - make_interval(mins => $3))", [ownerId, pid, i, `Ação ${i}`])
+  const a = await listActions({ limit: 3 })
+  check('page of 3 with has_more', (a.body.actions as any[]).length === 3 && a.body.has_more === true && (a.body.actions as any[])[0].summary === 'Ação 0')
+  const b = await listActions({ limit: 3, offset: 3 })
+  check('second page continues', (b.body.actions as any[]).map((x) => x.summary).join() === 'Ação 3,Ação 4,Ação 5' && b.body.has_more === true)
+  const c = await listActions({ limit: 3, offset: 6 })
+  check('last page', (c.body.actions as any[]).length === 1 && c.body.has_more === false)
+  check('default page covers all 7', ((await listActions()).body.actions as any[]).length === 7)
+  check('limit above 200 is clamped, not an error', (await listActions({ limit: 5000 })).status === 200)
+  for (const body of [{ action: 'new_thread' }, { action: 'list_threads' }, { action: 'get_thread', thread_id: crypto.randomUUID() }, { action: 'list_actions' }, { action: 'undo_logged', pending_id: pid, action_index: 0 }]) {
+    const r = await call(body, proJwt)
+    check(`professional: 403 on ${body.action}`, r.status === 403 && !('actions' in r.body) && !('threads' in r.body), String(r.status))
+    check(`no token: 401 on ${body.action}`, (await call(body, null)).status === 401)
+  }
+  check('professional left the log untouched', (await logRows()).length === 7)
+  await q('delete from assistant_actions_log where pending_id = $1', [pid])
+  await q("insert into assistant_messages (owner_user_id, thread_id, role, body) select $1, '00000000-0000-0000-0000-0000000000aa', 'user', 'x' from generate_series(1,30)", [ownerId])
+  world.script = [() => [text('Oi.')]]
+  check('rate limit still applies to messages', (await say('a mais')).status === 429)
+  check('and to new_thread and undo_logged', (await newThread()).status === 429 && (await undoLogged(pid, 0)).status === 429)
+  check('reading the history is not blocked', (await listThreads()).status === 200 && (await listActions()).status === 200)
+  world.script = []
 })
 
 // ---------------------------------------------------------------- run

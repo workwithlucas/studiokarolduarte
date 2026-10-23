@@ -119,3 +119,44 @@ export type AssistantBody =
   | { action: 'confirm'; pending_id: string; request_id?: string }
   | { action: 'cancel'; pending_id: string; request_id?: string }
   | { action: 'undo'; pending_id: string; action_index?: number; request_id?: string }
+  | { action: 'new_thread'; request_id?: string }
+  | { action: 'list_threads'; limit?: number }
+  | { action: 'get_thread'; thread_id: string }
+  | { action: 'list_actions'; limit?: number; offset?: number }
+  | { action: 'undo_logged'; pending_id: string; action_index: number }
+
+export interface ThreadSummary {
+  thread_id: string
+  title: string
+  started_at: string
+  archived_at: string
+  message_count: number
+}
+export interface ThreadsResponse {
+  threads: ThreadSummary[]
+}
+
+export type ActionLogStatus = 'done' | 'undone' | 'failed'
+/** One row of assistant_actions_log plus whether its undo data is still there (the pending row lives 90 days). */
+export interface ActionLogItem {
+  pending_id: string
+  action_index: number
+  kind: string
+  summary: string
+  amount_cents: number | null
+  entry_id: string | null
+  client_name: string | null
+  status: ActionLogStatus
+  error_code: string | null
+  executed_at: string
+  undone_at: string | null
+  undoable: boolean
+}
+export interface ActionsResponse {
+  actions: ActionLogItem[]
+  has_more: boolean
+}
+export interface UndoLoggedResponse {
+  ok: boolean
+  message: string
+}

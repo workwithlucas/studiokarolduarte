@@ -24,10 +24,10 @@ insert into auth.users (id) values ('00000000-0000-0000-0000-00000000a001'), ('0
 update professionals set user_id = '00000000-0000-0000-0000-00000000a001' where id = pg_temp.u('karol');
 update professionals set user_id = '00000000-0000-0000-0000-00000000a002' where id = pg_temp.u('mara');
 
-insert into assistant_messages (owner_user_id, role, body) values
-  ('00000000-0000-0000-0000-00000000a001', 'user', 'mensagem da dona'),
-  ('00000000-0000-0000-0000-00000000a001', 'assistant', 'resposta'),
-  ('00000000-0000-0000-0000-00000000a002', 'user', 'mensagem de outra pessoa');
+insert into assistant_messages (owner_user_id, thread_id, role, body) values
+  ('00000000-0000-0000-0000-00000000a001', '00000000-0000-0000-0000-0000000000f1', 'user', 'mensagem da dona'),
+  ('00000000-0000-0000-0000-00000000a001', '00000000-0000-0000-0000-0000000000f1', 'assistant', 'resposta'),
+  ('00000000-0000-0000-0000-00000000a002', '00000000-0000-0000-0000-0000000000f2', 'user', 'mensagem de outra pessoa');
 insert into assistant_pending (owner_user_id, actions) values
   ('00000000-0000-0000-0000-00000000a001', '[{"kind":"void_entry","params":{},"summary":{"title":"x","lines":[],"warnings":[]}}]'),
   ('00000000-0000-0000-0000-00000000a002', '[{"kind":"void_entry","params":{},"summary":{"title":"x","lines":[],"warnings":[]}}]');
@@ -38,7 +38,7 @@ select is((select relrowsecurity from pg_class where relname = 'assistant_messag
 select is((select relrowsecurity from pg_class where relname = 'assistant_pending'), true, 'assistant_pending: RLS on');
 select is((select expires_at - created_at from assistant_pending limit 1), interval '15 minutes', 'pending: expires 15 minutes after creation');
 select is((select status from assistant_pending limit 1), 'pending', 'pending: default status');
-select throws_ok($$insert into assistant_messages (owner_user_id, role) values (gen_random_uuid(), 'system')$$, '23514', null, 'messages: role check');
+select throws_ok($$insert into assistant_messages (owner_user_id, thread_id, role) values (gen_random_uuid(), gen_random_uuid(), 'system')$$, '23514', null, 'messages: role check');
 select throws_ok($$insert into assistant_pending (owner_user_id, actions, status) values (gen_random_uuid(), '[]', 'done')$$, '23514', null, 'pending: status check');
 select is((select count(*) from pg_indexes where indexname = 'assistant_messages_owner_idx'), 1::bigint, 'messages: index (owner_user_id, created_at)');
 
@@ -81,19 +81,19 @@ select pg_temp.as_system();
 update ledger_entries set created_at = now() - interval '25 hours' where id = pg_temp.u('e1');
 select is((select rpc_finance_find_duplicate('expense', 'ZZ Assist gás', 2000, today_sp())), false, 'duplicate: older than 24 hours is not a duplicate');
 
--- ------------------------------------------------------------ purge removes rows older than 30 days
-insert into assistant_messages (owner_user_id, role, body, created_at) values
-  ('00000000-0000-0000-0000-00000000a001', 'user', 'velha', now() - interval '31 days'),
-  ('00000000-0000-0000-0000-00000000a001', 'user', 'quase velha', now() - interval '29 days');
+-- ------------------------------------------------------------ purge removes rows older than 90 days
+insert into assistant_messages (owner_user_id, thread_id, role, body, created_at) values
+  ('00000000-0000-0000-0000-00000000a001', '00000000-0000-0000-0000-0000000000f1', 'user', 'velha', now() - interval '91 days'),
+  ('00000000-0000-0000-0000-00000000a001', '00000000-0000-0000-0000-0000000000f1', 'user', 'quase velha', now() - interval '89 days');
 insert into assistant_pending (owner_user_id, actions, status, created_at) values
-  ('00000000-0000-0000-0000-00000000a001', '[{"kind":"void_entry"}]', 'expired', now() - interval '31 days'),
-  ('00000000-0000-0000-0000-00000000a001', '[{"kind":"void_entry"}]', 'cancelled', now() - interval '29 days');
+  ('00000000-0000-0000-0000-00000000a001', '[{"kind":"void_entry"}]', 'expired', now() - interval '91 days'),
+  ('00000000-0000-0000-0000-00000000a001', '[{"kind":"void_entry"}]', 'cancelled', now() - interval '89 days');
 select is((assistant_purge_old() ->> 'messages')::int, 1, 'purge: one old message deleted');
 select is((select count(*) from assistant_messages where body = 'velha'), 0::bigint, 'purge: old message gone');
-select is((select count(*) from assistant_messages where body = 'quase velha'), 1::bigint, 'purge: 29-day message kept');
+select is((select count(*) from assistant_messages where body = 'quase velha'), 1::bigint, 'purge: 89-day message kept');
 select is((select count(*) from assistant_messages where body = 'mensagem da dona'), 1::bigint, 'purge: recent message kept');
 select is((select count(*) from assistant_pending where status = 'expired'), 0::bigint, 'purge: old pending gone');
-select is((select count(*) from assistant_pending where status = 'cancelled'), 1::bigint, 'purge: 29-day pending kept');
+select is((select count(*) from assistant_pending where status = 'cancelled'), 1::bigint, 'purge: 89-day pending kept');
 select pg_temp.as_user('00000000-0000-0000-0000-00000000a001');
 select throws_ok($$select assistant_purge_old()$$, '42501', null, 'purge: not callable by the owner');
 select pg_temp.as_system();
