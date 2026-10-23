@@ -1,6 +1,6 @@
 // send-confirmations: tomorrow's appointments, one WhatsApp per phone, idempotent through wa_confirmations.
 import { callRpc, loadSettings, unwrap, updateConversation } from './db.ts'
-import { sendScheduled } from './outbound.ts'
+import { sendConfirmation } from './outbound.ts'
 import { firstName, normalizePhone } from './phone.ts'
 import { addDays, hhmm, hhmmToMinutes, isoOf, parseInstant, spParts } from './time.ts'
 import type { Deps, Settings } from './types.ts'
@@ -29,16 +29,16 @@ export interface Batch {
   items: CandidateAppt[]
 }
 
-/** Runs only when enabled, the agent is not off, and it is between confirmation_hour and 20:00 (São Paulo). */
+/** Runs only when enabled and between confirmation_hour and 20:00 (São Paulo). The agent mode plays no part. */
 export function confirmationsOpen(settings: Settings, nowMs: number): boolean {
-  if (!settings.confirmation_enabled || settings.agent_mode === 'off' || settings.agent_mode === 'shadow') return false
+  if (!settings.confirmation_enabled) return false
   const m = spParts(nowMs).minutes
   return m >= hhmmToMinutes(settings.confirmation_hour, 16 * 60) && m < CUTOFF_MINUTES
 }
 
 /** Pure selection: tomorrow (São Paulo), status scheduled, valid phone, not yet confirmed, created 3h+ ago. */
 export function selectConfirmations(input: { appointments: CandidateAppt[]; alreadySent: Set<string>; nowMs: number; settings: Settings }): Batch[] {
-  const { appointments, alreadySent, nowMs, settings } = input
+  const { appointments, alreadySent, nowMs } = input
   const tomorrow = addDays(spParts(nowMs).ymd, 1)
   const byPhone = new Map<string, Batch>()
   const sorted = [...appointments].sort((a, b) => (parseInstant(a.starts_at) ?? 0) - (parseInstant(b.starts_at) ?? 0))
@@ -51,7 +51,6 @@ export function selectConfirmations(input: { appointments: CandidateAppt[]; alre
     if (nowMs - created < MIN_AGE_MS) continue
     const phone = normalizePhone(a.client_phone)
     if (!phone) continue
-    if (settings.agent_mode === 'test' && !settings.agent_test_numbers.includes(phone)) continue
     const b = byPhone.get(phone) ?? { phone, clientIds: [], items: [] }
     if (!b.clientIds.includes(a.client_id)) b.clientIds.push(a.client_id)
     b.items.push(a)
@@ -124,9 +123,9 @@ export async function runConfirmations(deps: Deps, budgetMs = RUN_BUDGET_MS): Pr
         continue
       }
       const text = confirmationText(batch)
-      const r = await sendScheduled(deps, { conversationId: convId, phone: batch.phone, text, purpose: 'confirmation' })
+      const r = await sendConfirmation(deps, { conversationId: convId, phone: batch.phone, text })
       if (!r.sent) {
-        skipped++ // the mode changed since the batch started: nothing goes out
+        skipped++
         continue
       }
       const messageId = r.messageRowId ?? null

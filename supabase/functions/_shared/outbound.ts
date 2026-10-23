@@ -142,3 +142,14 @@ export async function sendScheduled(deps: Deps, s: ScheduledSend): Promise<{ sen
   const id = await callRpc<string | null>(deps.db, 'agent_attach_send', { p_send_id: sendId, p_external_id: r.messageId, p_purpose: s.purpose })
   return { sent: true, messageRowId: id }
 }
+
+/**
+ * Daily confirmation: independent of agent_mode (off, shadow, test and live all send) and of the thread mode, and
+ * it never touches the thread state. Not a reply, so no inbound gates. Never calls the model.
+ */
+export async function sendConfirmation(deps: Deps, s: Omit<ScheduledSend, 'purpose'>): Promise<{ sent: boolean; messageRowId?: string | null }> {
+  const sendId = await callRpc<string>(deps.db, 'agent_register_send', { p_conversation_id: s.conversationId, p_decision_id: null, p_body: s.text })
+  const r = await sendText(deps.fetch, deps.cfg.zapi, s.phone, s.text)
+  const id = await callRpc<string | null>(deps.db, 'agent_attach_send', { p_send_id: sendId, p_external_id: r.messageId, p_purpose: 'confirmation' })
+  return { sent: true, messageRowId: id }
+}

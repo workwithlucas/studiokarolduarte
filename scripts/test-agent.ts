@@ -1369,6 +1369,72 @@ sc('51 cron pre-check: false when nothing is eligible, true when something is', 
   check('the cron wrapper is a no-op while disabled (no error)', true)
 })
 
+/** Books n clients with an appointment tomorrow, created 5 h before the fake "now" (17:00 SP today). */
+async function confSetup(n: number, base: number) {
+  const fake = parseInstant(`${today()}T17:00:00`)!
+  const tomorrow = addDays(today(), 1)
+  const out: Array<{ phone: string; cid: string; id: string }> = []
+  for (let i = 0; i < n; i++) {
+    const phone = P(base + i)
+    const cid = await newClient(`ZZA Modo ${base + i}`, phone)
+    const id = await bookStaff(cid, i % 2 ? milenaId : maraId, `${tomorrow}T${String(8 + i).padStart(2, '0')}:00:00-03:00`, true)
+    await q('update appointments set created_at = $2::timestamptz where id = $1', [id, new Date(fake - 5 * 3600_000).toISOString()])
+    out.push({ phone, cid, id })
+  }
+  return { fake, rows: out }
+}
+const confRows = async (ids: string[]) => (await q<any>('select count(*)::int as n from wa_confirmations where appointment_id = any($1::uuid[])', [ids]))[0].n as number
+
+sc('52 confirmations ignore agent_mode: off, shadow, test (not whitelisted) and live all send', async () => {
+  for (const mode of ['off', 'shadow', 'test', 'live']) {
+    await reset()
+    const { fake, rows } = await confSetup(3, 120)
+    await setSettings({ agent_mode: mode, agent_test_numbers: mode === 'test' ? [P(999)] : [], confirmation_enabled: true, confirmation_hour: '16:00' })
+    const r = await runConfirmations(mkDeps({ now: () => fake }))
+    check(`${mode}: every eligible appointment confirmed`, r.sent === 3 && rows.every((x) => sentTo(x.phone).length === 1), JSON.stringify(r))
+    check(`${mode}: wa_confirmations rows and outbound purpose 'confirmation'`, (await confRows(rows.map((x) => x.id))) === 3 && (await q<any>("select count(*)::int as n from wa_messages m join wa_conversations c on c.id = m.conversation_id where c.phone_e164 = any($1) and m.purpose = 'confirmation'", [rows.map((x) => x.phone)]))[0].n === 3)
+    check(`${mode}: the model is never called`, world.llmCalls === 0)
+    const bad = await invariants()
+    check(`${mode}: check_invariants() = 0 rows`, bad === 0, String(bad))
+    world.reset()
+  }
+})
+
+sc('53 confirmations: gates (disabled, before hour, from 20:00), second tick, human thread untouched', async () => {
+  const { fake, rows } = await confSetup(2, 130)
+  const ids = rows.map((x) => x.id)
+  await setSettings({ agent_mode: 'off', confirmation_enabled: false, confirmation_hour: '16:00' })
+  const r0 = await runConfirmations(mkDeps({ now: () => fake }))
+  check('confirmation_enabled false: none', r0.sent === 0 && world.sends.length === 0 && (await confRows(ids)) === 0, JSON.stringify(r0))
+  await setSettings({ agent_mode: 'off', confirmation_enabled: true, confirmation_hour: '16:00' })
+  const at = (hhmm: string) => parseInstant(`${today()}T${hhmm}:00`)!
+  const rb = await runConfirmations(mkDeps({ now: () => at('15:59') }))
+  const r20 = await runConfirmations(mkDeps({ now: () => at('20:00') }))
+  check('before confirmation_hour and at 20:00: none', rb.sent === 0 && r20.sent === 0 && world.sends.length === 0 && (await confRows(ids)) === 0, JSON.stringify([rb, r20]))
+  // a conversation in human mode still receives it, and its state is not touched
+  const until = new Date(Date.now() + 2 * 3600_000).toISOString()
+  await q("insert into wa_conversations (phone_e164, mode, human_until, pending_since, needs_attention, attention_reason) values ($1,'human',$2,$3,true,'x')", [rows[0]!.phone, until, new Date(Date.now() - 60_000).toISOString()])
+  const snap = async () => (await q<any>("select mode, human_until, pending_since, needs_attention from wa_conversations where phone_e164 = $1", [rows[0]!.phone]))[0]
+  const before = JSON.stringify(await snap())
+  const r1 = await runConfirmations(mkDeps({ now: () => fake }))
+  check('human conversation still receives the confirmation', r1.sent === 2 && sentTo(rows[0]!.phone).length === 1 && (await confRows(ids)) === 2, JSON.stringify(r1))
+  check('mode, human_until, pending_since, needs_attention unchanged', JSON.stringify(await snap()) === before, before)
+  const r2 = await runConfirmations(mkDeps({ now: () => fake }))
+  check('second tick the same day: no duplicates', r2.sent === 0 && world.sends.length === 2 && (await confRows(ids)) === 2, JSON.stringify(r2))
+  check('the model is never called', world.llmCalls === 0)
+})
+
+sc('54 cron pre-check is independent of agent_mode', async () => {
+  const pre = async () => (await q<any>('select _confirmations_eligible() as e'))[0].e as boolean
+  await setSettings({ agent_mode: 'off', confirmation_enabled: true })
+  check('off, nothing eligible: false', (await pre()) === false)
+  const { rows } = await confSetup(1, 140)
+  await q("update appointments set created_at = now() - interval '4 hours' where id = $1", [rows[0]!.id])
+  check('off, something eligible: true', (await pre()) === true)
+  await q('select _cron_send_confirmations()') // reads no agent_mode; without Vault entries the call itself is a no-op
+  check('cron wrapper runs in off without error', true)
+})
+
 // ---------------------------------------------------------------- run
 async function main() {
   await pgc.connect()

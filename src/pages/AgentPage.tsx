@@ -141,6 +141,7 @@ export function AgentPage() {
           <div>
             <p className="font-medium">Confirmar horários de amanhã</p>
             <p className="text-help">Envia uma mensagem por telefone, a partir do horário abaixo e até 20:00.</p>
+            <p className="text-help">Enviadas todos os dias, mesmo com a Thaís desligada.</p>
           </div>
           <Toggle label="Confirmações automáticas" checked={s.confirmation_enabled} onChange={(v) => void save({ confirmation_enabled: v })} />
         </div>

@@ -26,6 +26,7 @@ Regras deste roteiro:
 13. Endurecimento do agente, Tarefa 12 (incidente de 05/10): backup, `supabase db push`, deploy de todas as funções do agente (passo 19f). **O agente fica *Desligada* até as conferências do 19f passarem.**
 13b. Alterar serviço e duração, busca na agenda, Tarefa 13: backup, depois `supabase db push` (passo 19g)
 13c. Pacote no pagamento, confiabilidade da Thaís e ritmo das confirmações (Tarefa 10 desta rodada): backup, `supabase db push`, deploy de todas as funções do agente (passo 19h)
+13d. Confirmações independentes do modo da Thaís, Tarefa 14: `supabase db push` e deploy de `send-confirmations`, `wa-webhook`, `agent-run` e `wa-sweep` (passo 19i)
 14. Agente em modo *Sombra*, depois *Teste* (passo 20)
 15. Agente em modo *No ar* (passo 21)
 
@@ -490,6 +491,35 @@ update studio_settings set value = '8' where key = 'confirmation_delay_max_s';
    - Agente (use *Teste* com o seu número): ao oferecer horários a Thaís escreve só as opções (o sistema troca pelo dia e a hora, por exemplo "amanhã (quarta, 21/10) às 17:00"); depois que a cliente aceita, a mensagem final é montada pelo sistema ("Pronto, Ana! Agendei ... com ... amanhã (quarta, 21/10) às 17:00."), seguida do endereço. As opções valem 30 minutos; depois disso ela busca os horários de novo. Cliente com pacote do serviço usa a sessão do pacote sem a Thaís dizer preço; se o pacote venceu para aquela data ou acabou, o resumo avisa e o agendamento é pago.
    - Se a Thaís escrever um horário, uma data, um dia da semana (depois de consultar a agenda), afirmar que marcou/cancelou sem ter feito, ou prometer uma ação, a resposta é regenerada uma vez; se continuar errada, sai "Só um instante, vou confirmar isso com a Karol e já te retorno.", a conversa passa para a equipe e o motivo aparece em *Precisa de você*. A coluna `meta` da mensagem em `wa_messages` guarda as ferramentas usadas e `guard` (`none`, `regenerated` ou `fallback`).
 
+**19i. Confirmações independentes do modo da Thaís (Tarefa 14).** Com o Supabase de produção já vinculado (passo 6). A partir daqui as confirmações de amanhã saem todos os dias no horário configurado, **mesmo com a Thaís em *Desligada*, *Sombra* ou *Teste*** (em *Teste* também para números fora da lista de teste). Elas continuam dependendo da chave *Confirmações automáticas*, de estar entre o horário configurado e 20:00 (São Paulo) e de haver agendamento elegível. O envio nunca chama o modelo e não muda o modo, a pausa nem os alertas de nenhuma conversa (uma conversa em modo humano também recebe). Traz uma migration nova (`20261013120000_confirmations_any_mode.sql`), aditiva: só recria `_cron_send_confirmations()`. Nenhum nome ou código de erro muda. Faça nesta ordem:
+
+1. **Aplique a migration:**
+
+```powershell
+supabase db push
+```
+
+2. **Publique as funções** (uma por linha). `send-confirmations` é a que muda o comportamento; as outras compartilham o mesmo código e são publicadas de novo por segurança:
+
+```powershell
+supabase functions deploy send-confirmations --no-verify-jwt
+```
+
+```powershell
+supabase functions deploy wa-webhook --no-verify-jwt
+```
+
+```powershell
+supabase functions deploy agent-run --no-verify-jwt
+```
+
+```powershell
+supabase functions deploy wa-sweep --no-verify-jwt
+```
+
+3. **Publique o app** (passos 14 e 15): a página *Agente* mostra "Enviadas todos os dias, mesmo com a Thaís desligada." sob a chave, e a chave e o horário ficam editáveis em qualquer modo.
+4. **Conferir.** Com a Thaís em *Desligada*, a chave ligada e um agendamento elegível para amanhã (criado há mais de 3 horas), a confirmação sai dentro de 5 minutos depois do horário configurado. Se não quiser que saia agora, desligue a chave *Confirmações automáticas* antes de publicar.
+
 **20. Modo Teste com o seu telefone.** No app, *Agente*: em *Teste* adicione o seu número (com DDD) e escolha *Teste*. Mande mensagens do seu celular e confira:
 
 - comece por *Sombra* por algumas horas (só rascunhos, nenhuma mensagem sai) e leia *Rascunhos da Thaís*;
@@ -506,7 +536,7 @@ Teste também um áudio, uma foto e uma figurinha. Se algo estiver estranho, toq
 
 **21. Modo No ar.** Quando estiver satisfeita, escolha *No ar* (o app pede confirmação). Acompanhe a página *Agente* nos primeiros dias.
 
-**22. Confirmações de amanhã (opcional, depois de alguns dias no ar).** Em *Agente* > *Confirmações*, ligue a chave e ajuste o horário (a partir de 16:00, até 20:00). Elas só saem para agendamentos de amanhã, com status *agendado*, criados há pelo menos 3 horas. O envio é conferido a cada 5 minutos e vai pausando alguns segundos entre uma cliente e outra (passo 19h, item 5).
+**22. Confirmações de amanhã (opcional, depois de alguns dias no ar).** Em *Agente* > *Confirmações*, ligue a chave e ajuste o horário (a partir de 16:00, até 20:00). Elas só saem para agendamentos de amanhã, com status *agendado*, criados há pelo menos 3 horas. O envio é conferido a cada 5 minutos e vai pausando alguns segundos entre uma cliente e outra (passo 19h, item 5). Desde a Tarefa 14 elas saem em qualquer modo da Thaís, inclusive *Desligada* (passo 19i).
 
 ## Parte G: rotina
 

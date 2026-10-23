@@ -247,16 +247,18 @@ describe('confirmation selection', () => {
     expect(confirmationText(b[0]!)).toContain('10:00')
     expect(confirmationText(b[0]!)).toContain('Posso confirmar?')
   })
-  it('test mode: whitelisted phones only', () => expect(sel([mk('a')], new Set(), { ...settings, agent_mode: 'test', agent_test_numbers: [] })).toEqual([]))
+  it('selection ignores agent_mode: off, shadow, test (non-whitelisted) and live all select', () => {
+    for (const agent_mode of ['off', 'shadow', 'test', 'live'] as const) expect(sel([mk('a')], new Set(), { ...settings, agent_mode, agent_test_numbers: [] })).toHaveLength(1)
+  })
   it('has no per-run recipient cap (the 120 s budget paces the run)', () => {
     const many = Array.from({ length: 50 }, (_, i) => mk(`m${i}`, { client_phone: `11 9${String(1000_0000 + i)}` }))
     expect(sel(many)).toHaveLength(50)
   })
-  it('opens between confirmation_hour and 20:00 only, and never when off', () => {
+  it('opens between confirmation_hour and 20:00 only, whatever the agent mode', () => {
     expect(confirmationsOpen(settings, sp('2026-10-05T15:59:00'))).toBe(false)
     expect(confirmationsOpen(settings, sp('2026-10-05T16:00:00'))).toBe(true)
     expect(confirmationsOpen(settings, sp('2026-10-05T20:00:00'))).toBe(false)
-    expect(confirmationsOpen({ ...settings, agent_mode: 'off' }, sp('2026-10-05T17:00:00'))).toBe(false)
+    for (const agent_mode of ['off', 'shadow', 'test', 'live'] as const) expect(confirmationsOpen({ ...settings, agent_mode }, sp('2026-10-05T17:00:00'))).toBe(true)
     expect(confirmationsOpen({ ...settings, confirmation_enabled: false }, sp('2026-10-05T17:00:00'))).toBe(false)
   })
 })
