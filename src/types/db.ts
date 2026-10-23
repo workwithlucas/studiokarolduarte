@@ -1548,6 +1548,10 @@ export type Database = {
     }
     Functions: {
       _actor_type: { Args: never; Returns: string }
+      _appt_has_live_payments: {
+        Args: { p_appointment_id: string }
+        Returns: boolean
+      }
       _audit: {
         Args: { p_action: string; p_entity: string; p_entity_id: string }
         Returns: undefined
@@ -1557,7 +1561,6 @@ export type Database = {
         Returns: string
       }
       _client_credit_balance: { Args: { p_client_id: string }; Returns: number }
-      _appt_has_live_payments: { Args: { p_appointment_id: string }; Returns: boolean }
       _confirmations_eligible: { Args: never; Returns: boolean }
       _cron_call: { Args: { p_function: string }; Returns: undefined }
       _cron_send_confirmations: { Args: never; Returns: undefined }
@@ -1917,15 +1920,6 @@ export type Database = {
         Returns: string
       }
       rpc_delete_block: { Args: { p_block_id: string }; Returns: undefined }
-      rpc_eligible_packages: {
-        Args: { p_appointment_id: string }
-        Returns: {
-          client_package_id: string
-          expires_at: string
-          remaining: number
-          template_name: string
-        }[]
-      }
       rpc_edit_appointment: {
         Args: {
           p_addon_ids?: string[]
@@ -1946,6 +1940,15 @@ export type Database = {
           p_entry_id: string
         }
         Returns: undefined
+      }
+      rpc_eligible_packages: {
+        Args: { p_appointment_id: string }
+        Returns: {
+          client_package_id: string
+          expires_at: string
+          remaining: number
+          template_name: string
+        }[]
       }
       rpc_finance_entry: {
         Args: { p_appointment_id?: string; p_client_package_id?: string }
